@@ -1,0 +1,15 @@
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.SP/bin/Debug/net10.0/Infrastructure.SP.deps.json
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.SP/bin/Debug/net10.0/Infrastructure.SP.dll
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.SP/bin/Debug/net10.0/Infrastructure.SP.pdb
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.SP/bin/Debug/net10.0/ApplicationCore.dll
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.SP/bin/Debug/net10.0/ApplicationCore.pdb
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.SP/obj/Debug/net10.0/Infrastructure.SP.csproj.AssemblyReference.cache
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.SP/obj/Debug/net10.0/Infrastructure.SP.GeneratedMSBuildEditorConfig.editorconfig
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.SP/obj/Debug/net10.0/Infrastructure.SP.AssemblyInfoInputs.cache
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.SP/obj/Debug/net10.0/Infrastructure.SP.AssemblyInfo.cs
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.SP/obj/Debug/net10.0/Infrastructure.SP.csproj.CoreCompileInputs.cache
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.SP/obj/Debug/net10.0/Infrastr.40AB29BE.Up2Date
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.SP/obj/Debug/net10.0/Infrastructure.SP.dll
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.SP/obj/Debug/net10.0/refint/Infrastructure.SP.dll
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.SP/obj/Debug/net10.0/Infrastructure.SP.pdb
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.SP/obj/Debug/net10.0/ref/Infrastructure.SP.dll

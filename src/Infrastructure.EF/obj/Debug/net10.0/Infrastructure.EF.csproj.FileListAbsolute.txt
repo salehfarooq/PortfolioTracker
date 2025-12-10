@@ -1,0 +1,17 @@
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/bin/Debug/net10.0/Infrastructure.EF.deps.json
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/bin/Debug/net10.0/Infrastructure.EF.dll
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/bin/Debug/net10.0/Infrastructure.EF.pdb
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/bin/Debug/net10.0/ApplicationCore.dll
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/bin/Debug/net10.0/ApplicationCore.pdb
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/obj/Debug/net10.0/Infrastructure.EF.csproj.AssemblyReference.cache
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/obj/Debug/net10.0/Infrastructure.EF.GeneratedMSBuildEditorConfig.editorconfig
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/obj/Debug/net10.0/Infrastructure.EF.AssemblyInfoInputs.cache
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/obj/Debug/net10.0/Infrastructure.EF.AssemblyInfo.cs
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/obj/Debug/net10.0/Infrastructure.EF.csproj.CoreCompileInputs.cache
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/obj/Debug/net10.0/Infrastr.5F952914.Up2Date
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/obj/Debug/net10.0/Infrastructure.EF.dll
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/obj/Debug/net10.0/refint/Infrastructure.EF.dll
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/obj/Debug/net10.0/Infrastructure.EF.pdb
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/obj/Debug/net10.0/ref/Infrastructure.EF.dll
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/bin/Debug/net10.0/Infrastructure.EF.runtimeconfig.json
+/Users/hp/Desktop/Databases/proj/src/Infrastructure.EF/obj/Debug/net10.0/Infrastructure.EF.genruntimeconfig.cache

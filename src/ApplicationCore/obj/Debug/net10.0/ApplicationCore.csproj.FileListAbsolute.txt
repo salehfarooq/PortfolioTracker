@@ -1,0 +1,12 @@
+/Users/hp/Desktop/Databases/proj/src/ApplicationCore/bin/Debug/net10.0/ApplicationCore.deps.json
+/Users/hp/Desktop/Databases/proj/src/ApplicationCore/bin/Debug/net10.0/ApplicationCore.dll
+/Users/hp/Desktop/Databases/proj/src/ApplicationCore/bin/Debug/net10.0/ApplicationCore.pdb
+/Users/hp/Desktop/Databases/proj/src/ApplicationCore/obj/Debug/net10.0/ApplicationCore.GeneratedMSBuildEditorConfig.editorconfig
+/Users/hp/Desktop/Databases/proj/src/ApplicationCore/obj/Debug/net10.0/ApplicationCore.AssemblyInfoInputs.cache
+/Users/hp/Desktop/Databases/proj/src/ApplicationCore/obj/Debug/net10.0/ApplicationCore.AssemblyInfo.cs
+/Users/hp/Desktop/Databases/proj/src/ApplicationCore/obj/Debug/net10.0/ApplicationCore.csproj.CoreCompileInputs.cache
+/Users/hp/Desktop/Databases/proj/src/ApplicationCore/obj/Debug/net10.0/ApplicationCore.dll
+/Users/hp/Desktop/Databases/proj/src/ApplicationCore/obj/Debug/net10.0/refint/ApplicationCore.dll
+/Users/hp/Desktop/Databases/proj/src/ApplicationCore/obj/Debug/net10.0/ApplicationCore.pdb
+/Users/hp/Desktop/Databases/proj/src/ApplicationCore/obj/Debug/net10.0/ref/ApplicationCore.dll
+/Users/hp/Desktop/Databases/proj/src/ApplicationCore/obj/Debug/net10.0/ApplicationCore.csproj.AssemblyReference.cache
