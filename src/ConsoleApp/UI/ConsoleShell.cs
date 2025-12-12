@@ -123,6 +123,7 @@ internal class ConsoleShell
                 "Add account",
                 "Delete user",
                 "User overview",
+                "User security summary",
                 "View securities",
                 "View holdings",
                 "Portfolio snapshot",
@@ -150,33 +151,36 @@ internal class ConsoleShell
                     await ShowUserOverviewAsync();
                     break;
                 case 5:
-                    await ShowSecuritiesAsync();
+                    await ShowUserSecuritiesAsync();
                     break;
                 case 6:
-                    await ShowHoldingsAsync();
+                    await ShowSecuritiesAsync();
                     break;
                 case 7:
-                    await ShowSnapshotAsync();
+                    await ShowHoldingsAsync();
                     break;
                 case 8:
-                    await ShowRecentTradesAsync();
+                    await ShowSnapshotAsync();
                     break;
                 case 9:
-                    await ShowCashAsync();
+                    await ShowRecentTradesAsync();
                     break;
                 case 10:
-                    await ShowTopAssetsAsync();
+                    await ShowCashAsync();
                     break;
                 case 11:
-                    await ShowReturnSeriesAsync();
+                    await ShowTopAssetsAsync();
                     break;
                 case 12:
-                    await PlaceOrderAsync();
+                    await ShowReturnSeriesAsync();
                     break;
                 case 13:
-                    await SwitchBackendAsync();
+                    await PlaceOrderAsync();
                     break;
                 case 14:
+                    await SwitchBackendAsync();
+                    break;
+                case 15:
                     UiPrinter.Info("Goodbye!");
                     return;
             }
@@ -484,6 +488,86 @@ internal class ConsoleShell
         catch (Exception ex)
         {
             UiPrinter.Error($"Failed to load user overview: {ex.Message}");
+            UiPrompts.Pause();
+        }
+    }
+
+    private async Task ShowUserSecuritiesAsync()
+    {
+        if (_dal is null)
+        {
+            UiPrinter.Error("Backend not initialized.");
+            UiPrompts.Pause();
+            return;
+        }
+
+        try
+        {
+            var users = await _dal.AccountService.GetUsersAsync();
+            if (users.Count == 0)
+            {
+                UiPrinter.Warn("No users found.");
+                UiPrompts.Pause();
+                return;
+            }
+
+            UiPrinter.Header("Users");
+            UiPrinter.Table(
+                new[] { "#", "User ID", "Username", "Full Name", "Accounts", "Active Accounts" },
+                users.Select((u, idx) => new[]
+                {
+                    (idx + 1).ToString(),
+                    u.UserId.ToString(),
+                    u.Username,
+                    u.FullName,
+                    u.AccountCount.ToString(),
+                    u.ActiveAccountCount.ToString()
+                }).ToList());
+
+            var choice = UiPrompts.ReadInt("Select user # to view securities with current prices", 1, 1, users.Count);
+            var selected = users[choice - 1];
+
+            var overview = await _dal.PortfolioService.GetUserOverviewAsync(selected.UserId);
+            UiPrinter.Header($"User Securities: {selected.Username}");
+            UiPrinter.Kv("Total Security Value", overview.TotalSecurityValue.ToString("N2"));
+
+            if (overview.Securities.Any())
+            {
+                UiPrinter.Table(
+                    new[] { "Security ID", "Ticker", "Company", "Qty", "Avg Cost", "Current Price", "Market Value", "Unrealized P/L" },
+                    overview.Securities.Select(s => new[]
+                    {
+                        s.SecurityId.ToString(),
+                        s.Ticker,
+                        s.CompanyName,
+                        s.Quantity.ToString("N2"),
+                        s.AvgCost.ToString("N2"),
+                        s.LatestPrice.ToString("N2"),
+                        s.MarketValue.ToString("N2"),
+                        s.UnrealizedPL.ToString("N2")
+                    }).ToList(),
+                    footer: new[]
+                    {
+                        "TOTAL",
+                        "",
+                        "",
+                        "",
+                        "",
+                        "",
+                        overview.TotalSecurityValue.ToString("N2"),
+                        overview.TotalUnrealizedPL.ToString("N2")
+                    });
+            }
+            else
+            {
+                UiPrinter.Warn("No holdings for this user.");
+            }
+
+            UiPrompts.Pause();
+        }
+        catch (Exception ex)
+        {
+            UiPrinter.Error($"Failed to load user securities: {ex.Message}");
             UiPrompts.Pause();
         }
     }

@@ -142,16 +142,17 @@ dotnet run --project src/ConsoleApp
 2. Add account: Prompts for username, full name, email, account name, account type. Creates a user + account and auto-selects it.
 3. Delete user: Lists users with account counts; confirms before deactivating their accounts.
 4. User overview: Aggregated view across all of a user’s accounts (per-security quantities, market value, unrealized P/L, cash balance, total portfolio value, realized P/L, net contributions, total return %).
-5. View securities: Choose Active-only or All. Non-synthetic tickers show first. Paging with Next/Previous/Change page size; “Synthetic” column flags generated tickers.
-6. View holdings: Shows ticker, qty, avg cost, price, market value, unrealized P/L for the selected account. Totals at the bottom.
-7. Portfolio snapshot (account overview): Shows total security value, cash balance, combined portfolio value, total unrealized/realized P/L, net contributions (from cash ledger), total return %, plus top holdings for the selected account.
-8. Recent trades: Enter how many rows to show. Displays date, ticker, side, qty, price (selected account).
-9. Recent cash activity: Enter how many rows to show. Displays date, type, amount, reference (selected account).
-10. Top assets: Choose metric (MarketValue, UnrealizedPL, ReturnPct), enter top N; shows ranked holdings (selected account).
-11. Security return series: Enter Security ID and optional start/end dates. Preview returns (date, close, daily %, cumulative %). Use “View securities” to find IDs (selected account).
-12. Place order: Choose Buy or Sell, enter Security ID, quantity, price. SELLs are pre-validated against your current holdings; if you try to sell more than you hold, you get a friendly warning and nothing is sent to the DB (selected account).
-13. Switch backend: Reopen the startup menu and switch between EF and SP without restarting the app.
-14. Exit: Quit the app.
+5. User security summary: Aggregated securities across the selected user, showing current price, qty, market value, unrealized P/L, and total security value.
+6. View securities: Choose Active-only or All. Non-synthetic tickers show first. Paging with Next/Previous/Change page size; “Synthetic” column flags generated tickers.
+7. View holdings: Shows ticker, qty, avg cost, current price, market value, unrealized P/L for the selected account. Totals at the bottom.
+8. Portfolio snapshot (account overview): Shows total security value, cash balance, combined portfolio value, total unrealized/realized P/L, net contributions (from cash ledger), total return %, plus top holdings for the selected account.
+9. Recent trades: Enter how many rows to show. Displays date, ticker, side, qty, price (selected account).
+10. Recent cash activity: Enter how many rows to show. Displays date, type, amount, reference (selected account).
+11. Top assets: Choose metric (MarketValue, UnrealizedPL, ReturnPct), enter top N; shows ranked holdings (selected account).
+12. Security return series: Enter Security ID and optional start/end dates. Preview returns (date, close, daily %, cumulative %). Use “View securities” to find IDs (selected account).
+13. Place order: Choose Buy or Sell, enter Security ID, quantity, price. SELLs are pre-validated against your current holdings; if you try to sell more than you hold, you get a friendly warning and nothing is sent to the DB (selected account).
+14. Switch backend: Reopen the startup menu and switch between EF and SP without restarting the app.
+15. Exit: Quit the app.
 
 **General tips:**
 - Always “Select account” after adding or switching backend to be sure you’re acting on the right account.
