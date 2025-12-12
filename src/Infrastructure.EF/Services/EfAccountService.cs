@@ -126,4 +126,69 @@ public class EfAccountService : IAccountService
             throw new InvalidOperationException("Failed to create account.", ex);
         }
     }
+
+    public async Task<IReadOnlyList<UserSummaryDto>> GetUsersAsync()
+    {
+        try
+        {
+            var summaries = await _context.Users
+                .AsNoTracking()
+                .Select(u => new
+                {
+                    u.UserID,
+                    u.Username,
+                    u.FullName,
+                    u.Email,
+                    AccountCount = u.Accounts.Count,
+                    ActiveAccountCount = u.Accounts.Count(a => a.IsActive)
+                })
+                .OrderBy(u => u.Username)
+                .ToListAsync()
+                .ConfigureAwait(false);
+
+            return summaries.Select(u => new UserSummaryDto
+            {
+                UserId = u.UserID,
+                Username = u.Username,
+                FullName = u.FullName,
+                Email = u.Email,
+                AccountCount = u.AccountCount,
+                ActiveAccountCount = u.ActiveAccountCount
+            }).ToList();
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"EfAccountService.GetUsersAsync failed: {ex}");
+            throw new InvalidOperationException("Failed to retrieve users.", ex);
+        }
+    }
+
+    public async Task<bool> DeleteUserAsync(int userId)
+    {
+        try
+        {
+            var user = await _context.Users
+                .Include(u => u.Accounts)
+                .SingleOrDefaultAsync(u => u.UserID == userId)
+                .ConfigureAwait(false);
+
+            if (user is null)
+            {
+                return false;
+            }
+
+            foreach (var acct in user.Accounts)
+            {
+                acct.IsActive = false;
+            }
+
+            await _context.SaveChangesAsync().ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"EfAccountService.DeleteUserAsync({userId}) failed: {ex}");
+            throw new InvalidOperationException("Failed to delete user.", ex);
+        }
+    }
 }

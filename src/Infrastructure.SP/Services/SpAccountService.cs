@@ -153,4 +153,72 @@ VALUES (@UserID, @AccountType, @AccountName, 1, CONVERT(date, GETDATE()));";
             throw new InvalidOperationException("Failed to create account via stored procedures.", ex);
         }
     }
+
+    public async Task<IReadOnlyList<UserSummaryDto>> GetUsersAsync()
+    {
+        const string sql = @"
+SELECT u.UserID, u.Username, u.FullName, u.Email,
+       COUNT(a.AccountID) AS AccountCount,
+       SUM(CASE WHEN a.IsActive = 1 THEN 1 ELSE 0 END) AS ActiveAccountCount
+FROM Users u
+LEFT JOIN Accounts a ON a.UserID = u.UserID
+GROUP BY u.UserID, u.Username, u.FullName, u.Email
+ORDER BY u.Username;";
+
+        try
+        {
+            using var conn = _connectionFactory.CreateOpenConnection();
+            using var cmd = new SqlCommand(sql, (SqlConnection)conn);
+            using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+            var list = new List<UserSummaryDto>();
+            while (await reader.ReadAsync().ConfigureAwait(false))
+            {
+                list.Add(new UserSummaryDto
+                {
+                    UserId = reader.GetInt32(0),
+                    Username = reader.GetString(1),
+                    FullName = reader.GetString(2),
+                    Email = reader.GetString(3),
+                    AccountCount = reader.IsDBNull(4) ? 0 : reader.GetInt32(4),
+                    ActiveAccountCount = reader.IsDBNull(5) ? 0 : reader.GetInt32(5)
+                });
+            }
+
+            return list;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"SpAccountService.GetUsersAsync failed: {ex}");
+            throw new InvalidOperationException("Failed to retrieve users via stored procedures.", ex);
+        }
+    }
+
+    public async Task<bool> DeleteUserAsync(int userId)
+    {
+        const string deactivateSql = @"
+UPDATE Accounts
+SET IsActive = 0
+WHERE UserID = @UserID;
+";
+
+        try
+        {
+            using var conn = _connectionFactory.CreateOpenConnection();
+            using var tx = await ((SqlConnection)conn).BeginTransactionAsync().ConfigureAwait(false);
+
+            using (var cmd = new SqlCommand(deactivateSql, (SqlConnection)conn, (SqlTransaction)tx))
+            {
+                cmd.Parameters.AddWithValue("@UserID", userId);
+                await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }
+
+            await tx.CommitAsync().ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"SpAccountService.DeleteUserAsync({userId}) failed: {ex}");
+            throw new InvalidOperationException("Failed to delete user via stored procedures.", ex);
+        }
+    }
 }

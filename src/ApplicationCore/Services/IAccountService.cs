@@ -9,4 +9,6 @@ public interface IAccountService
     Task<IReadOnlyList<AccountSummaryDto>> GetAccountsAsync();
     Task<AccountSummaryDto?> GetAccountAsync(int accountId);
     Task<AccountSummaryDto> CreateAccountAsync(NewAccountDto newAccount);
+    Task<IReadOnlyList<UserSummaryDto>> GetUsersAsync();
+    Task<bool> DeleteUserAsync(int userId);
 }

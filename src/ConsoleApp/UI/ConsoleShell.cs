@@ -101,6 +101,7 @@ internal class ConsoleShell
             {
                 "Select account",
                 "Add account",
+                "Delete user",
                 "View securities",
                 "View holdings",
                 "Portfolio snapshot",
@@ -122,33 +123,36 @@ internal class ConsoleShell
                     await AddAccountAsync();
                     break;
                 case 3:
-                    await ShowSecuritiesAsync();
+                    await DeleteUserAsync();
                     break;
                 case 4:
-                    await ShowHoldingsAsync();
+                    await ShowSecuritiesAsync();
                     break;
                 case 5:
-                    await ShowSnapshotAsync();
+                    await ShowHoldingsAsync();
                     break;
                 case 6:
-                    await ShowRecentTradesAsync();
+                    await ShowSnapshotAsync();
                     break;
                 case 7:
-                    await ShowCashAsync();
+                    await ShowRecentTradesAsync();
                     break;
                 case 8:
-                    await ShowTopAssetsAsync();
+                    await ShowCashAsync();
                     break;
                 case 9:
-                    await ShowReturnSeriesAsync();
+                    await ShowTopAssetsAsync();
                     break;
                 case 10:
-                    await PlaceOrderAsync();
+                    await ShowReturnSeriesAsync();
                     break;
                 case 11:
-                    await SwitchBackendAsync();
+                    await PlaceOrderAsync();
                     break;
                 case 12:
+                    await SwitchBackendAsync();
+                    break;
+                case 13:
                     UiPrinter.Info("Goodbye!");
                     return;
             }
@@ -323,6 +327,66 @@ internal class ConsoleShell
         catch (Exception ex)
         {
             UiPrinter.Error($"Failed to create account: {ex.Message}");
+            UiPrompts.Pause();
+        }
+    }
+
+    private async Task DeleteUserAsync()
+    {
+        if (_dal is null)
+        {
+            UiPrinter.Error("Backend not initialized.");
+            UiPrompts.Pause();
+            return;
+        }
+
+        try
+        {
+            var users = await _dal.AccountService.GetUsersAsync();
+            if (users.Count == 0)
+            {
+                UiPrinter.Warn("No users found.");
+                UiPrompts.Pause();
+                return;
+            }
+
+            UiPrinter.Header("Users");
+            UiPrinter.Table(
+                new[] { "#", "User ID", "Username", "Full Name", "Email", "Accounts", "Active Accounts" },
+                users.Select((u, idx) => new[]
+                {
+                    (idx + 1).ToString(),
+                    u.UserId.ToString(),
+                    u.Username,
+                    u.FullName,
+                    u.Email,
+                    u.AccountCount.ToString(),
+                    u.ActiveAccountCount.ToString()
+                }).ToList());
+
+            var choice = UiPrompts.ReadInt("Select user # to delete", null, 1, users.Count);
+            var selected = users[choice - 1];
+            UiPrinter.Warn($"You are about to deactivate all accounts for user '{selected.Username}'. Historical data remains intact.");
+            var confirm = UiPrompts.Menu("Confirm delete", new[] { "Yes, delete user", "Cancel" });
+            if (confirm != 1)
+            {
+                UiPrinter.Warn("Delete cancelled.");
+                UiPrompts.Pause();
+                return;
+            }
+
+            var success = await _dal.AccountService.DeleteUserAsync(selected.UserId);
+            if (success && _selectedAccount?.UserName == selected.Username)
+            {
+                _selectedAccount = null;
+            }
+
+            UiPrinter.Info("User deleted (accounts marked inactive).");
+            UiPrompts.Pause();
+        }
+        catch (Exception ex)
+        {
+            UiPrinter.Error($"Failed to delete user: {ex.Message}");
             UiPrompts.Pause();
         }
     }
