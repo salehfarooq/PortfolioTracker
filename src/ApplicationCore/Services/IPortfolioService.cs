@@ -16,4 +16,6 @@ public interface IPortfolioService
     Task<IReadOnlyList<HoldingDto>> GetTopAssetsAsync(int accountId, int topN, string metric);
     Task<decimal?> GetVolatilityAsync(int securityId, DateTime? start, DateTime? end);
     Task<IReadOnlyList<SecurityDto>> GetSecuritiesAsync(bool activeOnly);
+    Task<PortfolioOverviewDto> GetAccountOverviewAsync(int accountId);
+    Task<PortfolioOverviewDto> GetUserOverviewAsync(int userId);
 }

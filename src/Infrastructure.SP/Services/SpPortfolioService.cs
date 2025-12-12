@@ -463,6 +463,32 @@ FROM Securities";
         }
     }
 
+    public async Task<PortfolioOverviewDto> GetAccountOverviewAsync(int accountId)
+    {
+        try
+        {
+            return await BuildOverviewAsync(accountId, null).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"SpPortfolioService.GetAccountOverviewAsync({accountId}) failed: {ex}");
+            throw new InvalidOperationException($"Failed to build overview for account {accountId} via stored procedures.", ex);
+        }
+    }
+
+    public async Task<PortfolioOverviewDto> GetUserOverviewAsync(int userId)
+    {
+        try
+        {
+            return await BuildOverviewAsync(null, userId).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"SpPortfolioService.GetUserOverviewAsync({userId}) failed: {ex}");
+            throw new InvalidOperationException($"Failed to build overview for user {userId} via stored procedures.", ex);
+        }
+    }
+
     private async Task<(decimal realized, decimal invested)> CalculateRealizedAndInvestedAsync(int accountId, DateTime? asOfDate)
     {
         const string sql = @"
@@ -558,6 +584,165 @@ WHERE o.AccountID = @AccountID
         {
             ordinal = -1;
             return false;
+        }
+    }
+
+    private async Task<PortfolioOverviewDto> BuildOverviewAsync(int? accountId, int? userId)
+    {
+        var filter = accountId.HasValue ? "a.AccountID = @AccountID" : "a.UserID = @UserID";
+        var securities = new List<PortfolioSecuritySummaryDto>();
+
+        const string holdingsSqlTemplate = @"
+SELECT hv.SecurityID, hv.Ticker, hv.CompanyName, hv.Quantity, hv.AvgCost, hv.LatestClosePrice
+FROM v_AccountHoldingsValue hv
+JOIN Accounts a ON a.AccountID = hv.AccountID
+WHERE {FILTER} AND hv.Quantity <> 0;";
+
+        const string cashSqlTemplate = @"
+SELECT
+    SUM(cl.Amount) AS CashBalance,
+    SUM(CASE WHEN LOWER(cl.Type) LIKE 'deposit%' OR LOWER(cl.Type) LIKE 'dividend%' OR LOWER(cl.Type) LIKE 'credit%' THEN cl.Amount ELSE 0 END) AS Deposits,
+    SUM(CASE WHEN LOWER(cl.Type) LIKE 'withdraw%' OR LOWER(cl.Type) LIKE 'fee%' OR LOWER(cl.Type) LIKE 'debit%' THEN cl.Amount ELSE 0 END) AS Withdrawals
+FROM CashLedger cl
+JOIN Accounts a ON a.AccountID = cl.AccountID
+WHERE {FILTER};";
+
+        const string tradesSqlTemplate = @"
+SELECT o.SecurityID, o.OrderType, t.Quantity, t.Price
+FROM Trades t
+JOIN Orders o ON t.OrderID = o.OrderID
+JOIN Accounts a ON a.AccountID = o.AccountID
+WHERE {FILTER};";
+
+        try
+        {
+            using var conn = _connectionFactory.CreateOpenConnection();
+
+            // Holdings and pricing
+            var holdingsCmd = new SqlCommand(holdingsSqlTemplate.Replace("{FILTER}", filter), (SqlConnection)conn);
+            AddFilterParam(holdingsCmd, accountId, userId);
+            using (var reader = await holdingsCmd.ExecuteReaderAsync().ConfigureAwait(false))
+            {
+                var rows = new List<(int SecurityId, string Ticker, string Company, decimal Qty, decimal AvgCost, decimal Price)>();
+                while (await reader.ReadAsync().ConfigureAwait(false))
+                {
+                    rows.Add((
+                        reader.GetInt32(0),
+                        reader.GetString(1),
+                        reader.GetString(2),
+                        reader.GetDecimal(3),
+                        reader.GetDecimal(4),
+                        reader.GetDecimal(5)
+                    ));
+                }
+                securities = rows
+                    .GroupBy(r => r.SecurityId)
+                    .Select(g =>
+                    {
+                        var qty = g.Sum(x => x.Qty);
+                        var costSum = g.Sum(x => x.Qty * x.AvgCost);
+                        var avgCost = qty != 0 ? costSum / qty : 0m;
+                        var price = g.First().Price;
+                        var mv = qty * price;
+                        var upl = (price - avgCost) * qty;
+                        var first = g.First();
+                        return new PortfolioSecuritySummaryDto
+                        {
+                            SecurityId = g.Key,
+                            Ticker = first.Ticker,
+                            CompanyName = first.Company,
+                            Quantity = qty,
+                            AvgCost = avgCost,
+                            LatestPrice = price,
+                            MarketValue = mv,
+                            UnrealizedPL = upl
+                        };
+                    })
+                    .OrderByDescending(s => s.MarketValue)
+                    .ToList();
+            }
+
+            var totalSecurityValue = securities.Sum(s => s.MarketValue);
+            var totalUnrealized = securities.Sum(s => s.UnrealizedPL);
+
+            // Cash and contributions
+            decimal cashBalance = 0m;
+            decimal deposits = 0m;
+            decimal withdrawals = 0m;
+            var cashCmd = new SqlCommand(cashSqlTemplate.Replace("{FILTER}", filter), (SqlConnection)conn);
+            AddFilterParam(cashCmd, accountId, userId);
+            using (var reader = await cashCmd.ExecuteReaderAsync().ConfigureAwait(false))
+            {
+                if (await reader.ReadAsync().ConfigureAwait(false))
+                {
+                    cashBalance = reader.IsDBNull(0) ? 0m : reader.GetDecimal(0);
+                    deposits = reader.IsDBNull(1) ? 0m : reader.GetDecimal(1);
+                    withdrawals = reader.IsDBNull(2) ? 0m : reader.GetDecimal(2);
+                }
+            }
+            var netContribution = deposits - withdrawals;
+
+            // Trades for realized P/L
+            var trades = new List<(int SecurityId, string OrderType, decimal Qty, decimal Price)>();
+            var tradesCmd = new SqlCommand(tradesSqlTemplate.Replace("{FILTER}", filter), (SqlConnection)conn);
+            AddFilterParam(tradesCmd, accountId, userId);
+            using (var reader = await tradesCmd.ExecuteReaderAsync().ConfigureAwait(false))
+            {
+                while (await reader.ReadAsync().ConfigureAwait(false))
+                {
+                    trades.Add((
+                        reader.GetInt32(0),
+                        reader.GetString(1),
+                        reader.GetDecimal(2),
+                        reader.GetDecimal(3)
+                    ));
+                }
+            }
+
+            decimal realized = 0m;
+            foreach (var group in trades.GroupBy(t => t.SecurityId))
+            {
+                var buys = group.Where(t => string.Equals(t.OrderType, "BUY", StringComparison.OrdinalIgnoreCase)).ToList();
+                var sells = group.Where(t => string.Equals(t.OrderType, "SELL", StringComparison.OrdinalIgnoreCase)).ToList();
+                var buyQty = buys.Sum(b => b.Qty);
+                var buyCost = buys.Sum(b => b.Qty * b.Price);
+                var avgCost = buyQty > 0 ? buyCost / buyQty : 0m;
+                realized += sells.Sum(s => s.Qty * (s.Price - avgCost));
+            }
+
+            var totalPortfolioValue = totalSecurityValue + cashBalance;
+            var totalReturnPct = netContribution > 0 ? (totalPortfolioValue - netContribution) / netContribution : (decimal?)null;
+
+            return new PortfolioOverviewDto
+            {
+                AccountId = accountId,
+                UserId = userId,
+                Securities = securities,
+                TotalSecurityValue = totalSecurityValue,
+                CashBalance = cashBalance,
+                TotalPortfolioValue = totalPortfolioValue,
+                TotalUnrealizedPL = totalUnrealized,
+                TotalRealizedPL = realized,
+                NetContribution = netContribution,
+                TotalReturnPct = totalReturnPct
+            };
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"SpPortfolioService.BuildOverviewAsync failed: {ex}");
+            throw;
+        }
+    }
+
+    private static void AddFilterParam(SqlCommand cmd, int? accountId, int? userId)
+    {
+        if (accountId.HasValue)
+        {
+            cmd.Parameters.AddWithValue("@AccountID", accountId.Value);
+        }
+        else
+        {
+            cmd.Parameters.AddWithValue("@UserID", userId!.Value);
         }
     }
 

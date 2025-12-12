@@ -9,8 +9,11 @@ namespace ConsoleApp.UI;
 
 internal class ConsoleShell
 {
-    private const string DefaultConnection = "Server=localhost,1433;Database=PortfolioDB;User Id=sa;Password=Muhammadsaleh1@;TrustServerCertificate=True;";
-    private string _connectionString = DefaultConnection;
+    private const string DefaultServer = "localhost,1433";
+    private const string DefaultDatabase = "PortfolioDB";
+    private const string DefaultUser = "sa";
+    private const string DefaultPassword = "Muhammadsaleh1@";
+    private string _connectionString = $"Server={DefaultServer};Database={DefaultDatabase};User Id={DefaultUser};Password={DefaultPassword};TrustServerCertificate=True;";
     private string _backend = "ef";
     private IPortfolioDataAccess? _dal;
     private AccountSummaryDto? _selectedAccount;
@@ -37,6 +40,23 @@ internal class ConsoleShell
         }
     }
 
+    private static string BuildConnectionString(string username, string password, string? server = null, string? database = null)
+    {
+        var srv = string.IsNullOrWhiteSpace(server) ? DefaultServer : server;
+        var db = string.IsNullOrWhiteSpace(database) ? DefaultDatabase : database;
+        return $"Server={srv};Database={db};User Id={username};Password={password};TrustServerCertificate=True;";
+    }
+
+    private void PromptForConnectionCredentials()
+    {
+        UiPrinter.Info("Enter SQL credentials (we will build the connection string for you). Defaults target localhost:1433/PortfolioDB.");
+        var username = UiPrompts.ReadString("SQL username", DefaultUser, "e.g., sa");
+        var password = UiPrompts.ReadString("SQL password", DefaultPassword, "e.g., your SA password");
+        _connectionString = BuildConnectionString(username, password);
+        UiPrinter.Info("Connection string updated. Password is masked in status.");
+        UiPrompts.Pause();
+    }
+
     private async Task EnsureBackendAsync(bool interactive)
     {
         if (interactive)
@@ -61,7 +81,7 @@ internal class ConsoleShell
             {
                 "Use EF / LINQ",
                 "Use Stored Procedures",
-                "Change connection string",
+                "Set database username/password",
                 "Continue"
             });
 
@@ -74,7 +94,7 @@ internal class ConsoleShell
                     _backend = "sproc";
                     break;
                 case 3:
-                    _connectionString = UiPrompts.ReadString("Enter SQL connection string", _connectionString);
+                    PromptForConnectionCredentials();
                     break;
                 case 4:
                     try
@@ -102,6 +122,7 @@ internal class ConsoleShell
                 "Select account",
                 "Add account",
                 "Delete user",
+                "User overview",
                 "View securities",
                 "View holdings",
                 "Portfolio snapshot",
@@ -126,33 +147,36 @@ internal class ConsoleShell
                     await DeleteUserAsync();
                     break;
                 case 4:
-                    await ShowSecuritiesAsync();
+                    await ShowUserOverviewAsync();
                     break;
                 case 5:
-                    await ShowHoldingsAsync();
+                    await ShowSecuritiesAsync();
                     break;
                 case 6:
-                    await ShowSnapshotAsync();
+                    await ShowHoldingsAsync();
                     break;
                 case 7:
-                    await ShowRecentTradesAsync();
+                    await ShowSnapshotAsync();
                     break;
                 case 8:
-                    await ShowCashAsync();
+                    await ShowRecentTradesAsync();
                     break;
                 case 9:
-                    await ShowTopAssetsAsync();
+                    await ShowCashAsync();
                     break;
                 case 10:
-                    await ShowReturnSeriesAsync();
+                    await ShowTopAssetsAsync();
                     break;
                 case 11:
-                    await PlaceOrderAsync();
+                    await ShowReturnSeriesAsync();
                     break;
                 case 12:
-                    await SwitchBackendAsync();
+                    await PlaceOrderAsync();
                     break;
                 case 13:
+                    await SwitchBackendAsync();
+                    break;
+                case 14:
                     UiPrinter.Info("Goodbye!");
                     return;
             }
@@ -302,11 +326,11 @@ internal class ConsoleShell
             return;
         }
 
-        var username = UiPrompts.ReadString("Username", "user" + DateTime.UtcNow.Ticks.ToString()[^4..]);
+        var username = UiPrompts.ReadString("Username (letters/numbers, required)", "user" + DateTime.UtcNow.Ticks.ToString()[^4..]);
         var fullName = UiPrompts.ReadString("Full name", "New User");
         var email = UiPrompts.ReadString("Email", $"{username}@example.com");
-        var accountName = UiPrompts.ReadString("Account name", $"{fullName} Portfolio");
-        var accountType = UiPrompts.ReadString("Account type", "Individual");
+        var accountName = UiPrompts.ReadString("Account name (will appear in menus)", $"{fullName} Portfolio");
+        var accountType = UiPrompts.ReadString("Account type (e.g., Individual, Joint)", "Individual");
 
         try
         {
@@ -387,6 +411,79 @@ internal class ConsoleShell
         catch (Exception ex)
         {
             UiPrinter.Error($"Failed to delete user: {ex.Message}");
+            UiPrompts.Pause();
+        }
+    }
+
+    private async Task ShowUserOverviewAsync()
+    {
+        if (_dal is null)
+        {
+            UiPrinter.Error("Backend not initialized.");
+            UiPrompts.Pause();
+            return;
+        }
+
+        try
+        {
+            var users = await _dal.AccountService.GetUsersAsync();
+            if (users.Count == 0)
+            {
+                UiPrinter.Warn("No users found.");
+                UiPrompts.Pause();
+                return;
+            }
+
+            UiPrinter.Header("Users");
+            UiPrinter.Table(
+                new[] { "#", "User ID", "Username", "Full Name", "Accounts", "Active Accounts" },
+                users.Select((u, idx) => new[]
+                {
+                    (idx + 1).ToString(),
+                    u.UserId.ToString(),
+                    u.Username,
+                    u.FullName,
+                    u.AccountCount.ToString(),
+                    u.ActiveAccountCount.ToString()
+                }).ToList());
+
+            var choice = UiPrompts.ReadInt("Select user # to view overview", 1, 1, users.Count);
+            var selected = users[choice - 1];
+
+            var overview = await _dal.PortfolioService.GetUserOverviewAsync(selected.UserId);
+
+            UiPrinter.Header($"User Overview: {selected.Username}");
+            UiPrinter.Kv("Total Security Value", overview.TotalSecurityValue.ToString("N2"));
+            UiPrinter.Kv("Cash Balance", overview.CashBalance.ToString("N2"));
+            UiPrinter.Kv("Portfolio Value (Securities + Cash)", overview.TotalPortfolioValue.ToString("N2"));
+            UiPrinter.Kv("Total Unrealized P/L", overview.TotalUnrealizedPL.ToString("N2"));
+            UiPrinter.Kv("Total Realized P/L", overview.TotalRealizedPL.ToString("N2"));
+            UiPrinter.Kv("Net Contribution", overview.NetContribution.ToString("N2"));
+            UiPrinter.Kv("Total Return %", overview.TotalReturnPct?.ToString("P2") ?? "N/A");
+
+            if (overview.Securities.Any())
+            {
+                UiPrinter.SubHeader("All Securities (aggregated across this user’s accounts)");
+                UiPrinter.Table(
+                    new[] { "Security ID", "Ticker", "Company", "Qty", "Avg Cost", "Price", "Market Value", "Unrealized P/L" },
+                    overview.Securities.Select(s => new[]
+                    {
+                        s.SecurityId.ToString(),
+                        s.Ticker,
+                        s.CompanyName,
+                        s.Quantity.ToString("N2"),
+                        s.AvgCost.ToString("N2"),
+                        s.LatestPrice.ToString("N2"),
+                        s.MarketValue.ToString("N2"),
+                        s.UnrealizedPL.ToString("N2")
+                    }).ToList());
+            }
+
+            UiPrompts.Pause();
+        }
+        catch (Exception ex)
+        {
+            UiPrinter.Error($"Failed to load user overview: {ex.Message}");
             UiPrompts.Pause();
         }
     }
@@ -544,14 +641,17 @@ internal class ConsoleShell
 
         try
         {
-            var snapshot = await _dal!.PortfolioService.GetPortfolioSnapshotAsync(_selectedAccount!.AccountId, null);
-            UiPrinter.Header($"Snapshot as of {snapshot.AsOfDate:g}");
-            UiPrinter.Kv("Total Market Value", snapshot.TotalMarketValue.ToString("N2"));
-            UiPrinter.Kv("Unrealized P/L", snapshot.TotalUnrealizedPL.ToString("N2"));
-            UiPrinter.Kv("Realized P/L", snapshot.TotalRealizedPL?.ToString("N2") ?? "N/A");
-            UiPrinter.Kv("Total Return %", snapshot.TotalReturnPct?.ToString("P2") ?? "N/A");
+            var overview = await _dal!.PortfolioService.GetAccountOverviewAsync(_selectedAccount!.AccountId);
+            UiPrinter.Header($"Account Overview: {_selectedAccount.AccountName}");
+            UiPrinter.Kv("Total Security Value", overview.TotalSecurityValue.ToString("N2"));
+            UiPrinter.Kv("Cash Balance", overview.CashBalance.ToString("N2"));
+            UiPrinter.Kv("Portfolio Value (Securities + Cash)", overview.TotalPortfolioValue.ToString("N2"));
+            UiPrinter.Kv("Total Unrealized P/L", overview.TotalUnrealizedPL.ToString("N2"));
+            UiPrinter.Kv("Total Realized P/L", overview.TotalRealizedPL.ToString("N2"));
+            UiPrinter.Kv("Net Contribution", overview.NetContribution.ToString("N2"));
+            UiPrinter.Kv("Total Return %", overview.TotalReturnPct?.ToString("P2") ?? "N/A");
 
-            var top = snapshot.Holdings.OrderByDescending(h => h.MarketValue).Take(5).ToList();
+            var top = overview.Securities.OrderByDescending(h => h.MarketValue).Take(5).ToList();
             if (top.Any())
             {
                 UiPrinter.SubHeader("Top Holdings");
@@ -726,9 +826,9 @@ internal class ConsoleShell
 
         var sideChoice = UiPrompts.Menu("Order type", new[] { "Buy", "Sell" });
         var orderType = sideChoice == 1 ? OrderType.Buy : OrderType.Sell;
-        var securityId = UiPrompts.ReadInt("Security ID", null, 1, null);
-        var qty = UiPrompts.ReadDecimal("Quantity", null, 0.0001m, null);
-        var price = UiPrompts.ReadDecimal("Price", null, 0.0001m, null);
+        var securityId = UiPrompts.ReadInt("Security ID (use 'View securities' to find it)", null, 1, null);
+        var qty = UiPrompts.ReadDecimal("Quantity (positive, e.g., 10 or 10.5)", null, 0.0001m, null);
+        var price = UiPrompts.ReadDecimal("Price per share (e.g., 100.25)", null, 0.0001m, null);
 
         UiPrinter.Info($"About to place {orderType} for Security {securityId}, Qty {qty:N4}, Price {price:N4} on Account {_selectedAccount!.AccountName}");
         var confirm = UiPrompts.Menu("Confirm", new[] { "Yes, place order", "Cancel" });

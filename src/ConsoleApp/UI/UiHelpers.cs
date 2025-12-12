@@ -116,9 +116,10 @@ internal static class UiPrompts
         }
     }
 
-    public static string ReadString(string label, string defaultValue)
+    public static string ReadString(string label, string defaultValue, string? hint = null)
     {
-        Console.Write($"{label} [{defaultValue}]: ");
+        var suffix = string.IsNullOrWhiteSpace(hint) ? string.Empty : $" ({hint})";
+        Console.Write($"{label}{suffix} [{defaultValue}]: ");
         var input = Console.ReadLine();
         return string.IsNullOrWhiteSpace(input) ? defaultValue : input.Trim();
     }

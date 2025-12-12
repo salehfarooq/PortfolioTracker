@@ -373,6 +373,39 @@ public class EfPortfolioService : IPortfolioService
         }
     }
 
+    public async Task<PortfolioOverviewDto> GetAccountOverviewAsync(int accountId)
+    {
+        try
+        {
+            return await BuildOverviewAsync(new[] { accountId }, accountId, null).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"EfPortfolioService.GetAccountOverviewAsync({accountId}) failed: {ex}");
+            throw new InvalidOperationException($"Failed to build overview for account {accountId}.", ex);
+        }
+    }
+
+    public async Task<PortfolioOverviewDto> GetUserOverviewAsync(int userId)
+    {
+        try
+        {
+            var accountIds = await _context.Accounts
+                .AsNoTracking()
+                .Where(a => a.UserID == userId)
+                .Select(a => a.AccountID)
+                .ToListAsync()
+                .ConfigureAwait(false);
+
+            return await BuildOverviewAsync(accountIds, null, userId).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"EfPortfolioService.GetUserOverviewAsync({userId}) failed: {ex}");
+            throw new InvalidOperationException($"Failed to build overview for user {userId}.", ex);
+        }
+    }
+
     private async Task<List<HoldingDto>> LoadHoldingsAsync(int accountId, DateOnly? asOfDate)
     {
         var holdingsRaw = await _context.Holdings
@@ -461,4 +494,146 @@ public class EfPortfolioService : IPortfolioService
     }
 
     private sealed record TradeRow(int SecurityId, string OrderType, decimal Quantity, decimal Price);
+
+    private async Task<PortfolioOverviewDto> BuildOverviewAsync(IReadOnlyCollection<int> accountIds, int? accountId, int? userId)
+    {
+        if (accountIds == null || accountIds.Count == 0)
+        {
+            return new PortfolioOverviewDto
+            {
+                AccountId = accountId,
+                UserId = userId
+            };
+        }
+
+        var holdings = await _context.Holdings
+            .AsNoTracking()
+            .Include(h => h.Security)
+            .Where(h => accountIds.Contains(h.AccountID) && h.Quantity != 0)
+            .ToListAsync()
+            .ConfigureAwait(false);
+
+        var securityIds = holdings.Select(h => h.SecurityID).Distinct().ToList();
+        var latestPrices = await _context.v_SecurityLatestPrices
+            .AsNoTracking()
+            .Where(v => securityIds.Contains(v.SecurityID))
+            .ToDictionaryAsync(v => v.SecurityID, v => v.LatestClosePrice)
+            .ConfigureAwait(false);
+
+        var securities = holdings
+            .GroupBy(h => h.SecurityID)
+            .Select(g =>
+            {
+                var qty = g.Sum(x => x.Quantity);
+                var costSum = g.Sum(x => x.Quantity * x.AvgCost);
+                var avgCost = qty != 0 ? costSum / qty : 0m;
+                var price = latestPrices.TryGetValue(g.Key, out var p) ? p : 0m;
+                var mv = qty * price;
+                var upl = (price - avgCost) * qty;
+                var first = g.First();
+                return new PortfolioSecuritySummaryDto
+                {
+                    SecurityId = g.Key,
+                    Ticker = first.Security.Ticker,
+                    CompanyName = first.Security.CompanyName,
+                    Quantity = qty,
+                    AvgCost = avgCost,
+                    LatestPrice = price,
+                    MarketValue = mv,
+                    UnrealizedPL = upl
+                };
+            })
+            .OrderByDescending(s => s.MarketValue)
+            .ToList();
+
+        var totalSecurityValue = securities.Sum(s => s.MarketValue);
+        var totalUnrealized = securities.Sum(s => s.UnrealizedPL);
+
+        var cashEntries = await _context.CashLedgers
+            .AsNoTracking()
+            .Where(c => accountIds.Contains(c.AccountID))
+            .ToListAsync()
+            .ConfigureAwait(false);
+
+        var cashBalance = cashEntries.Sum(c => c.Amount);
+        var (deposits, withdrawals) = CalculateContributions(cashEntries);
+        var netContribution = deposits - withdrawals;
+
+        var trades = await _context.Trades
+            .AsNoTracking()
+            .Where(t => accountIds.Contains(t.Order.AccountID))
+            .Select(t => new TradeRow(
+                t.Order.SecurityID,
+                t.Order.OrderType,
+                t.Quantity,
+                t.Price))
+            .ToListAsync()
+            .ConfigureAwait(false);
+
+        var totalRealized = CalculateRealized(trades);
+        var totalPortfolioValue = totalSecurityValue + cashBalance;
+        var totalReturnPct = netContribution > 0 ? (totalPortfolioValue - netContribution) / netContribution : (decimal?)null;
+
+        return new PortfolioOverviewDto
+        {
+            AccountId = accountId,
+            UserId = userId,
+            Securities = securities,
+            TotalSecurityValue = totalSecurityValue,
+            CashBalance = cashBalance,
+            TotalPortfolioValue = totalPortfolioValue,
+            TotalUnrealizedPL = totalUnrealized,
+            TotalRealizedPL = totalRealized,
+            NetContribution = netContribution,
+            TotalReturnPct = totalReturnPct
+        };
+    }
+
+    private static decimal CalculateRealized(IEnumerable<TradeRow> trades)
+    {
+        decimal realized = 0m;
+        var grouped = trades.GroupBy(t => t.SecurityId);
+
+        foreach (var group in grouped)
+        {
+            var buys = group.Where(t => string.Equals(t.OrderType, "BUY", StringComparison.OrdinalIgnoreCase)).ToList();
+            var sells = group.Where(t => string.Equals(t.OrderType, "SELL", StringComparison.OrdinalIgnoreCase)).ToList();
+
+            var buyQty = buys.Sum(b => b.Quantity);
+            var buyCost = buys.Sum(b => b.Quantity * b.Price);
+            var avgCost = buyQty > 0 ? buyCost / buyQty : 0m;
+            realized += sells.Sum(s => s.Quantity * (s.Price - avgCost));
+        }
+
+        return realized;
+    }
+
+    private static (decimal deposits, decimal withdrawals) CalculateContributions(IEnumerable<CashLedger> entries)
+    {
+        decimal deposits = 0m;
+        decimal withdrawals = 0m;
+
+        foreach (var entry in entries)
+        {
+            var type = (entry.Type ?? string.Empty).ToLowerInvariant();
+            if (type.StartsWith("deposit") || type.StartsWith("dividend") || type.StartsWith("credit"))
+            {
+                deposits += entry.Amount;
+            }
+            else if (type.StartsWith("withdraw") || type.StartsWith("fee") || type.StartsWith("debit"))
+            {
+                withdrawals += entry.Amount;
+            }
+            else if (entry.Amount < 0)
+            {
+                withdrawals += Math.Abs(entry.Amount);
+            }
+            else
+            {
+                deposits += entry.Amount;
+            }
+        }
+
+        return (deposits, withdrawals);
+    }
 }
