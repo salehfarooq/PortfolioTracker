@@ -1,7 +1,8 @@
 using ApplicationCore.DTOs;
+using ApplicationCore.Domain;
 using ApplicationCore.Services;
-using System.Data.Common;
 using ApplicationCore.DataAccess;
+using Infrastructure.SP.DataAccess;
 using Microsoft.Data.SqlClient;
 using System.Security.Cryptography;
 
@@ -66,7 +67,7 @@ WHERE a.IsActive = 1 AND a.AccountID = @AccountID;";
         {
             using var conn = _connectionFactory.CreateOpenConnection();
             using var cmd = new SqlCommand(sql, (SqlConnection)conn);
-            cmd.Parameters.AddWithValue("@AccountID", accountId);
+            cmd.AddInt("@AccountID", accountId);
 
             using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
             if (!await reader.ReadAsync().ConfigureAwait(false))
@@ -78,11 +79,11 @@ WHERE a.IsActive = 1 AND a.AccountID = @AccountID;";
             {
                 AccountId = reader.GetInt32(0),
                 AccountName = reader.GetString(1),
-            UserName = reader.GetString(2),
-            AccountType = reader.GetString(3),
-            IsActive = reader.GetBoolean(4),
-            CreatedDate = reader.GetDateTime(5)
-        };
+                UserName = reader.GetString(2),
+                AccountType = reader.GetString(3),
+                IsActive = reader.GetBoolean(4),
+                CreatedDate = reader.GetDateTime(5)
+            };
         }
         catch (Exception ex)
         {
@@ -94,6 +95,7 @@ WHERE a.IsActive = 1 AND a.AccountID = @AccountID;";
     public async Task<AccountSummaryDto> CreateAccountAsync(NewAccountDto newAccount)
     {
         ArgumentNullException.ThrowIfNull(newAccount);
+        PortfolioValidation.ValidateNewAccount(newAccount);
 
         const string insertUserSql = @"
 INSERT INTO Users (Username, PasswordHash, PasswordSalt, FullName, Email, Role)
@@ -113,12 +115,12 @@ VALUES (@UserID, @AccountType, @AccountName, 1, CONVERT(date, GETDATE()));";
             int userId;
             using (var cmd = new SqlCommand(insertUserSql, (SqlConnection)conn, (SqlTransaction)tx))
             {
-                cmd.Parameters.AddWithValue("@Username", newAccount.Username);
-                cmd.Parameters.AddWithValue("@PasswordHash", RandomNumberGenerator.GetBytes(32));
-                cmd.Parameters.AddWithValue("@PasswordSalt", RandomNumberGenerator.GetBytes(16));
-                cmd.Parameters.AddWithValue("@FullName", newAccount.FullName);
-                cmd.Parameters.AddWithValue("@Email", newAccount.Email);
-                cmd.Parameters.AddWithValue("@Role", "User");
+                cmd.AddString("@Username", newAccount.Username.Trim(), 64);
+                cmd.AddBytes("@PasswordHash", RandomNumberGenerator.GetBytes(32), 256);
+                cmd.AddBytes("@PasswordSalt", RandomNumberGenerator.GetBytes(16), 128);
+                cmd.AddString("@FullName", newAccount.FullName.Trim(), 128);
+                cmd.AddString("@Email", newAccount.Email.Trim(), 128);
+                cmd.AddString("@Role", "User", 16);
 
                 var result = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
                 userId = Convert.ToInt32(result);
@@ -127,9 +129,9 @@ VALUES (@UserID, @AccountType, @AccountName, 1, CONVERT(date, GETDATE()));";
             int accountId;
             using (var cmd = new SqlCommand(insertAccountSql, (SqlConnection)conn, (SqlTransaction)tx))
             {
-                cmd.Parameters.AddWithValue("@UserID", userId);
-                cmd.Parameters.AddWithValue("@AccountType", newAccount.AccountType);
-                cmd.Parameters.AddWithValue("@AccountName", newAccount.AccountName);
+                cmd.AddInt("@UserID", userId);
+                cmd.AddString("@AccountType", newAccount.AccountType.Trim(), 32);
+                cmd.AddString("@AccountName", newAccount.AccountName.Trim(), 64);
 
                 var result = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
                 accountId = Convert.ToInt32(result);
@@ -206,14 +208,15 @@ WHERE UserID = @UserID;
             using var conn = _connectionFactory.CreateOpenConnection();
             using var tx = await ((SqlConnection)conn).BeginTransactionAsync().ConfigureAwait(false);
 
+            var affectedRows = 0;
             using (var cmd = new SqlCommand(deactivateSql, (SqlConnection)conn, (SqlTransaction)tx))
             {
-                cmd.Parameters.AddWithValue("@UserID", userId);
-                await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                cmd.AddInt("@UserID", userId);
+                affectedRows = await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
 
             await tx.CommitAsync().ConfigureAwait(false);
-            return true;
+            return affectedRows > 0;
         }
         catch (Exception ex)
         {

@@ -1,10 +1,10 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 
 namespace Infrastructure.EF.Generated;
 
-public partial class PortfolioDbContext : ApplicationCore.DataAccess.PortfolioDbContext
+public partial class PortfolioDbContext : DbContext
 {
     public PortfolioDbContext(DbContextOptions<PortfolioDbContext> options)
         : base(options)

@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using ApplicationCore.DTOs;
+using ApplicationCore.Domain;
 using ApplicationCore.Services;
 using Infrastructure.EF.Generated;
 using Microsoft.EntityFrameworkCore;
@@ -80,6 +81,8 @@ public class EfAccountService : IAccountService
     public async Task<AccountSummaryDto> CreateAccountAsync(NewAccountDto newAccount)
     {
         ArgumentNullException.ThrowIfNull(newAccount);
+        PortfolioValidation.ValidateNewAccount(newAccount);
+
         try
         {
             var salt = RandomNumberGenerator.GetBytes(16);
@@ -95,6 +98,8 @@ public class EfAccountService : IAccountService
                 PasswordSalt = salt
             };
 
+            await using var tx = await _context.Database.BeginTransactionAsync().ConfigureAwait(false);
+
             _context.Users.Add(user);
             await _context.SaveChangesAsync().ConfigureAwait(false);
 
@@ -109,6 +114,7 @@ public class EfAccountService : IAccountService
 
             _context.Accounts.Add(account);
             await _context.SaveChangesAsync().ConfigureAwait(false);
+            await tx.CommitAsync().ConfigureAwait(false);
 
             return new AccountSummaryDto
             {

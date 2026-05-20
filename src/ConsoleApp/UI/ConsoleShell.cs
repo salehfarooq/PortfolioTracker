@@ -1,19 +1,19 @@
 using ApplicationCore.DataAccess;
 using ApplicationCore.DTOs;
 using ApplicationCore.Enums;
-using ApplicationCore.Services;
+using ConsoleApp;
+using Infrastructure.EF.DataAccess;
 using Infrastructure.SP.DataAccess;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Data.SqlClient;
 
 namespace ConsoleApp.UI;
 
 internal class ConsoleShell
 {
-    private const string DefaultServer = "localhost,1433";
-    private const string DefaultDatabase = "PortfolioDB";
-    private const string DefaultUser = "sa";
-    private const string DefaultPassword = "Muhammadsaleh1@";
-    private string _connectionString = $"Server={DefaultServer};Database={DefaultDatabase};User Id={DefaultUser};Password={DefaultPassword};TrustServerCertificate=True;";
+    private CliOptions _options = new();
+    private DatabaseConnectionSettings _dbSettings = DatabaseConnectionSettings.FromEnvironment(new CliOptions());
+    private string _connectionString = DatabaseConnectionSettings.FromEnvironment(new CliOptions()).ToConnectionString();
     private string _backend = "ef";
     private IPortfolioDataAccess? _dal;
     private AccountSummaryDto? _selectedAccount;
@@ -21,39 +21,50 @@ internal class ConsoleShell
 
     public async Task RunAsync(string[] args)
     {
-        ParseArgs(args);
-        await EnsureBackendAsync(interactive: true);
+        try
+        {
+            _options = CliOptions.Parse(args);
+        }
+        catch (ArgumentException ex)
+        {
+            UiPrinter.Error(ex.Message);
+            Console.WriteLine();
+            Console.WriteLine(CliOptions.HelpText);
+            return;
+        }
+
+        if (_options.ShowHelp)
+        {
+            Console.WriteLine(CliOptions.HelpText);
+            return;
+        }
+
+        _dbSettings = DatabaseConnectionSettings.FromEnvironment(_options);
+        _connectionString = _dbSettings.ToConnectionString();
+        _backend = _options.Backend;
+
+        var interactiveStartup = !_options.DemoMode && !_options.HasExplicitStartupOptions;
+        await EnsureBackendAsync(interactive: interactiveStartup);
+
+        if (_options.DemoMode)
+        {
+            await RunDemoAsync();
+            return;
+        }
+
         await MainMenuAsync();
-    }
-
-    private void ParseArgs(string[] args)
-    {
-        if (args.Length > 0)
-        {
-            _backend = args[0].Trim().ToLowerInvariant();
-        }
-
-        var envConn = Environment.GetEnvironmentVariable("PORTFOLIO_DB_CONNECTION");
-        if (!string.IsNullOrWhiteSpace(envConn))
-        {
-            _connectionString = envConn;
-        }
-    }
-
-    private static string BuildConnectionString(string username, string password, string? server = null, string? database = null)
-    {
-        var srv = string.IsNullOrWhiteSpace(server) ? DefaultServer : server;
-        var db = string.IsNullOrWhiteSpace(database) ? DefaultDatabase : database;
-        return $"Server={srv};Database={db};User Id={username};Password={password};TrustServerCertificate=True;";
     }
 
     private void PromptForConnectionCredentials()
     {
-        UiPrinter.Info("Enter SQL credentials (we will build the connection string for you). Defaults target localhost:1433/PortfolioDB.");
-        var username = UiPrompts.ReadString("SQL username", DefaultUser, "e.g., sa");
-        var password = UiPrompts.ReadString("SQL password", DefaultPassword, "e.g., your SA password");
-        _connectionString = BuildConnectionString(username, password);
-        UiPrinter.Info("Connection string updated. Password is masked in status.");
+        UiPrinter.Info("Enter SQL Server connection details. The password is never printed or stored in the repo.");
+        var server = UiPrompts.ReadString("SQL server", _dbSettings.Server, "e.g., localhost,1433");
+        var database = UiPrompts.ReadString("Database", _dbSettings.Database, "e.g., PortfolioDB");
+        var username = UiPrompts.ReadString("SQL username", _dbSettings.User, "e.g., sa");
+        var password = UiPrompts.ReadSecret("SQL password", _dbSettings.Password);
+        _dbSettings = _dbSettings.WithCredentials(server, database, username, password);
+        _connectionString = _dbSettings.ToConnectionString();
+        UiPrinter.Info("Connection updated. Password is masked in status.");
         UiPrompts.Pause();
     }
 
@@ -75,13 +86,13 @@ internal class ConsoleShell
         {
             UiPrinter.Header("Welcome to Portfolio Console");
             Console.WriteLine($"Current backend: {_backend.ToUpperInvariant()}");
-            Console.WriteLine($"Connection: {MaskConnectionString(_connectionString)}");
+            Console.WriteLine($"Connection: {DatabaseConnectionSettings.Mask(_connectionString)}");
             Console.WriteLine();
             var choice = UiPrompts.Menu("Choose backend", new[]
             {
                 "Use EF / LINQ",
                 "Use Stored Procedures",
-                "Set database username/password",
+                "Set database connection",
                 "Continue"
             });
 
@@ -91,7 +102,7 @@ internal class ConsoleShell
                     _backend = "ef";
                     break;
                 case 2:
-                    _backend = "sproc";
+                    _backend = "sp";
                     break;
                 case 3:
                     PromptForConnectionCredentials();
@@ -116,7 +127,7 @@ internal class ConsoleShell
         while (true)
         {
             UiPrinter.Header("Portfolio Console");
-            UiPrinter.Status($"Backend: {_backend.ToUpperInvariant()} | Connection: {MaskConnectionString(_connectionString)} | Account: {(_selectedAccount?.AccountName ?? "None")}");
+            UiPrinter.Status($"Backend: {_backend.ToUpperInvariant()} | Connection: {DatabaseConnectionSettings.Mask(_connectionString)} | Account: {(_selectedAccount?.AccountName ?? "None")}");
             var choice = UiPrompts.Menu("Main Menu", new[]
             {
                 "Select account",
@@ -274,7 +285,7 @@ internal class ConsoleShell
                 var pageItems = ordered.Skip(page * pageSize).Take(pageSize).ToList();
 
                 UiPrinter.Header("Securities");
-                UiPrinter.Info($"Showing page {page + 1}/{totalPages} (size {pageSize}) • Total {total} securities");
+                UiPrinter.Info($"Showing page {page + 1}/{totalPages} (size {pageSize}) | Total {total} securities");
                 UiPrinter.Table(
                     new[] { "ID", "Ticker", "Company", "Sector", "Listed", "Active", "Synthetic" },
                     pageItems.Select(x => new[]
@@ -467,7 +478,7 @@ internal class ConsoleShell
 
             if (overview.Securities.Any())
             {
-                UiPrinter.SubHeader("All Securities (aggregated across this user’s accounts)");
+                UiPrinter.SubHeader("All Securities (aggregated across this user's accounts)");
                 UiPrinter.Table(
                     new[] { "Security ID", "Ticker", "Company", "Qty", "Avg Cost", "Price", "Market Value", "Unrealized P/L" },
                     overview.Securities.Select(s => new[]
@@ -646,21 +657,19 @@ internal class ConsoleShell
                 return;
             }
 
-            var rnd = new Random();
-            foreach (var account in createdAccounts)
+            foreach (var account in createdAccounts.Select((value, index) => new { value, index }))
             {
-                var qtyBase = rnd.Next(5, 15);
-                foreach (var sec in usable)
+                foreach (var security in usable.Select((value, index) => new { value, index }))
                 {
                     try
                     {
                         var dto = new NewOrderDto
                         {
-                            AccountId = account.AccountId,
-                            SecurityId = sec.SecurityId,
+                            AccountId = account.value.AccountId,
+                            SecurityId = security.value.SecurityId,
                             OrderType = OrderType.Buy,
-                            Quantity = qtyBase + rnd.Next(1, 5),
-                            Price = 50 + rnd.Next(1, 20)
+                            Quantity = 8 + account.index + security.index,
+                            Price = 50 + (security.value.SecurityId * 3)
                         };
                         await _dal.PortfolioService.PlaceOrderAsync(dto);
                     }
@@ -953,6 +962,8 @@ internal class ConsoleShell
 
     private async Task BuildDalAsync(string type)
     {
+        await ValidateDatabaseAsync().ConfigureAwait(false);
+
         switch (type.Trim().ToLowerInvariant())
         {
             case "ef":
@@ -961,23 +972,127 @@ internal class ConsoleShell
                     .UseSqlServer(_connectionString)
                     .Options;
                 var efContext = new Infrastructure.EF.Generated.PortfolioDbContext(options);
-                _dal = PortfolioDataAccessFactory.Create("ef", efContext, null);
+                _dal = new EfPortfolioDataAccess(efContext);
                 _backend = "ef";
                 break;
             case "sproc":
             case "sp":
                 var factory = new SqlConnectionFactory(_connectionString);
-                _dal = PortfolioDataAccessFactory.Create("sp", null!, factory);
-                _backend = "sproc";
+                _dal = new SpPortfolioDataAccess(factory);
+                _backend = "sp";
                 break;
             default:
                 throw new ArgumentException("Unknown backend type.");
         }
 
-        if (!_seedAttempted)
+        if (!_seedAttempted && !_options.NoSeed)
         {
             _seedAttempted = true;
             await SeedSampleDataAsync();
+        }
+    }
+
+    private async Task ValidateDatabaseAsync()
+    {
+        const string schemaCheckSql = @"
+SELECT COUNT(*)
+FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_SCHEMA = 'dbo'
+  AND TABLE_NAME IN ('Users','Accounts','Securities','PriceHistory','Holdings','Orders','Trades','CashLedger');";
+
+        try
+        {
+            await using var conn = new SqlConnection(_connectionString);
+            await conn.OpenAsync().ConfigureAwait(false);
+            await using var cmd = new SqlCommand(schemaCheckSql, conn);
+            var tableCount = Convert.ToInt32(await cmd.ExecuteScalarAsync().ConfigureAwait(false));
+            if (tableCount < 8)
+            {
+                throw new InvalidOperationException(
+                    "PortfolioDB is reachable but the expected schema is missing. Run scripts/setup-db.sh or db/PortfolioDB.sql first.");
+            }
+        }
+        catch (SqlException ex)
+        {
+            throw new InvalidOperationException(
+                "Could not connect to PortfolioDB. Start the Docker SQL Server with 'docker compose up -d' and run scripts/setup-db.sh, or set PORTFOLIO_DB_CONNECTION.",
+                ex);
+        }
+    }
+
+    private async Task RunDemoAsync()
+    {
+        if (_dal is null)
+        {
+            UiPrinter.Error("Backend not initialized.");
+            return;
+        }
+
+        UiPrinter.Header("Portfolio Demo");
+        UiPrinter.Status($"Backend: {_backend.ToUpperInvariant()} | Connection: {DatabaseConnectionSettings.Mask(_connectionString)}");
+
+        var accounts = await _dal.AccountService.GetAccountsAsync().ConfigureAwait(false);
+        if (accounts.Count == 0)
+        {
+            UiPrinter.Warn("No active accounts found. Run without --no-seed or load demo data first.");
+            return;
+        }
+
+        _selectedAccount = accounts.First();
+        UiPrinter.Kv("Selected Account", $"{_selectedAccount.AccountName} ({_selectedAccount.UserName})");
+
+        var overview = await _dal.PortfolioService.GetAccountOverviewAsync(_selectedAccount.AccountId).ConfigureAwait(false);
+        UiPrinter.SubHeader("Account Overview");
+        UiPrinter.Kv("Security Value", overview.TotalSecurityValue.ToString("N2"));
+        UiPrinter.Kv("Cash Balance", overview.CashBalance.ToString("N2"));
+        UiPrinter.Kv("Portfolio Value", overview.TotalPortfolioValue.ToString("N2"));
+        UiPrinter.Kv("Unrealized P/L", overview.TotalUnrealizedPL.ToString("N2"));
+        UiPrinter.Kv("Realized P/L", overview.TotalRealizedPL.ToString("N2"));
+        UiPrinter.Kv("Total Return", overview.TotalReturnPct?.ToString("P2") ?? "N/A");
+
+        var holdings = await _dal.PortfolioService.GetHoldingsAsync(_selectedAccount.AccountId).ConfigureAwait(false);
+        if (holdings.Count > 0)
+        {
+            UiPrinter.SubHeader("Top Holdings");
+            UiPrinter.Table(
+                new[] { "Ticker", "Qty", "Price", "Market Value", "Unrealized" },
+                holdings.OrderByDescending(h => h.MarketValue).Take(5).Select(h => new[]
+                {
+                    h.Ticker,
+                    h.Quantity.ToString("N2"),
+                    h.LatestPrice.ToString("N2"),
+                    h.MarketValue.ToString("N2"),
+                    h.UnrealizedPL.ToString("N2")
+                }).ToList());
+
+            var security = holdings.OrderByDescending(h => h.MarketValue).First();
+            var returns = await _dal.PortfolioService.GetSecurityReturnSeriesAsync(security.SecurityId, null, null).ConfigureAwait(false);
+            UiPrinter.SubHeader($"Return Preview: {security.Ticker}");
+            UiPrinter.Table(
+                new[] { "Date", "Close", "Daily%", "Cum%" },
+                returns.Take(5).Select(p => new[]
+                {
+                    p.PriceDate.ToString("yyyy-MM-dd"),
+                    p.ClosePrice.ToString("N2"),
+                    p.DailyReturnPct?.ToString("P2") ?? "",
+                    p.CumReturnApprox?.ToString("P2") ?? ""
+                }).ToList());
+        }
+
+        var trades = await _dal.PortfolioService.GetRecentTradesAsync(_selectedAccount.AccountId, 5).ConfigureAwait(false);
+        if (trades.Count > 0)
+        {
+            UiPrinter.SubHeader("Recent Trades");
+            UiPrinter.Table(
+                new[] { "Date", "Ticker", "Side", "Qty", "Price" },
+                trades.Select(t => new[]
+                {
+                    t.TradeDate.ToString("g"),
+                    t.Ticker,
+                    t.OrderType,
+                    t.Quantity.ToString("N2"),
+                    t.Price.ToString("N2")
+                }).ToList());
         }
     }
 
@@ -996,19 +1111,4 @@ internal class ConsoleShell
         return true;
     }
 
-    private static string MaskConnectionString(string conn)
-    {
-        if (string.IsNullOrWhiteSpace(conn)) return string.Empty;
-        var parts = conn.Split(';', StringSplitOptions.RemoveEmptyEntries);
-        var masked = parts.Select(p =>
-        {
-            if (p.Trim().StartsWith("Password", StringComparison.OrdinalIgnoreCase))
-            {
-                var kv = p.Split('=', 2);
-                return $"{kv[0]}=*****";
-            }
-            return p;
-        });
-        return string.Join(";", masked);
-    }
 }

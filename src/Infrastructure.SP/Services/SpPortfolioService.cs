@@ -4,8 +4,10 @@ using System.Data;
 using System.Linq;
 using ApplicationCore.DataAccess;
 using ApplicationCore.DTOs;
+using ApplicationCore.Domain;
 using ApplicationCore.Enums;
 using ApplicationCore.Services;
+using Infrastructure.SP.DataAccess;
 using Microsoft.Data.SqlClient;
 
 namespace Infrastructure.SP.Services;
@@ -31,7 +33,7 @@ WHERE hv.AccountID = @AccountID AND hv.Quantity <> 0;";
         {
             using var conn = _connectionFactory.CreateOpenConnection();
             using var cmd = new SqlCommand(sql, (SqlConnection)conn);
-            cmd.Parameters.AddWithValue("@AccountID", accountId);
+            cmd.AddInt("@AccountID", accountId);
 
             using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
             var holdings = new List<HoldingDto>();
@@ -74,9 +76,8 @@ WHERE hv.AccountID = @AccountID AND hv.Quantity <> 0;";
             using (var cmd = new SqlCommand(snapshotProc, (SqlConnection)conn))
             {
                 cmd.CommandType = CommandType.StoredProcedure;
-                cmd.Parameters.AddWithValue("@AccountID", accountId);
-                var asOfParam = cmd.Parameters.Add("@AsOfDate", SqlDbType.DateTime);
-                asOfParam.Value = (object?)asOfDate ?? DBNull.Value;
+                cmd.AddInt("@AccountID", accountId);
+                cmd.AddDateTime("@AsOfDate", asOfDate);
 
                 using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
                 var hasAsOf = TryGetOrdinal(reader, "AsOfDate", out var asOfOrdinal);
@@ -152,21 +153,18 @@ VALUES (@OrderID, SYSUTCDATETIME(), @Quantity, @Price, @Amount, @Fees);";
             var sqlConn = (SqlConnection)conn;
 
             var existingQty = await GetHoldingQuantityAsync(sqlConn, order.AccountId, order.SecurityId).ConfigureAwait(false);
-            if (order.OrderType == OrderType.Sell && existingQty < order.Quantity)
-            {
-                throw new InvalidOperationException($"Insufficient quantity to sell. Available: {existingQty}, Requested: {order.Quantity}.");
-            }
+            PortfolioValidation.ValidateOrder(order, existingQty);
 
             using var tx = (SqlTransaction)await sqlConn.BeginTransactionAsync().ConfigureAwait(false);
 
             int orderId;
             using (var cmd = new SqlCommand(insertOrderSql, sqlConn, tx))
             {
-                cmd.Parameters.AddWithValue("@AccountID", order.AccountId);
-                cmd.Parameters.AddWithValue("@SecurityID", order.SecurityId);
-                cmd.Parameters.AddWithValue("@OrderType", order.OrderType == OrderType.Buy ? "BUY" : "SELL");
-                cmd.Parameters.AddWithValue("@Quantity", order.Quantity);
-                cmd.Parameters.AddWithValue("@Price", order.Price);
+                cmd.AddInt("@AccountID", order.AccountId);
+                cmd.AddInt("@SecurityID", order.SecurityId);
+                cmd.AddFixedAnsiString("@OrderType", order.OrderType == OrderType.Buy ? "BUY" : "SELL", 4);
+                cmd.AddDecimal("@Quantity", order.Quantity, scale: 6);
+                cmd.AddDecimal("@Price", order.Price, scale: 4);
 
                 var result = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
                 orderId = Convert.ToInt32(result);
@@ -174,16 +172,24 @@ VALUES (@OrderID, SYSUTCDATETIME(), @Quantity, @Price, @Amount, @Fees);";
 
             using (var tradeCmd = new SqlCommand(insertTradeSql, sqlConn, tx))
             {
-                tradeCmd.Parameters.AddWithValue("@OrderID", orderId);
-                tradeCmd.Parameters.AddWithValue("@Quantity", order.Quantity);
-                tradeCmd.Parameters.AddWithValue("@Price", order.Price);
-                tradeCmd.Parameters.AddWithValue("@Amount", order.Quantity * order.Price);
-                tradeCmd.Parameters.AddWithValue("@Fees", 0m);
+                tradeCmd.AddInt("@OrderID", orderId);
+                tradeCmd.AddDecimal("@Quantity", order.Quantity, scale: 6);
+                tradeCmd.AddDecimal("@Price", order.Price, scale: 4);
+                tradeCmd.AddDecimal("@Amount", order.Quantity * order.Price, scale: 4);
+                tradeCmd.AddDecimal("@Fees", 0m, scale: 4);
 
                 await tradeCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
 
             await tx.CommitAsync().ConfigureAwait(false);
+        }
+        catch (ArgumentException)
+        {
+            throw;
+        }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("Insufficient quantity to sell", StringComparison.Ordinal))
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -195,7 +201,7 @@ VALUES (@OrderID, SYSUTCDATETIME(), @Quantity, @Price, @Amount, @Fees);";
     public async Task<IReadOnlyList<ReturnPointDto>> GetSecurityReturnSeriesAsync(int securityId, DateTime? start, DateTime? end)
     {
         const string procName = "usp_GetSecurityReturnSeries";
-        var points = new List<ReturnPointDto>();
+        var prices = new List<SecurityPricePoint>();
 
         try
         {
@@ -205,16 +211,12 @@ VALUES (@OrderID, SYSUTCDATETIME(), @Quantity, @Price, @Amount, @Fees);";
                 CommandType = CommandType.StoredProcedure
             };
 
-            cmd.Parameters.AddWithValue("@SecurityID", securityId);
-            var startParam = cmd.Parameters.Add("@StartDate", SqlDbType.DateTime);
-            startParam.Value = (object?)start ?? DBNull.Value;
-            var endParam = cmd.Parameters.Add("@EndDate", SqlDbType.DateTime);
-            endParam.Value = (object?)end ?? DBNull.Value;
+            cmd.AddInt("@SecurityID", securityId);
+            cmd.AddDateTime("@StartDate", start);
+            cmd.AddDateTime("@EndDate", end);
 
             using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
 
-            decimal? previousClose = null;
-            decimal? cumulative = null;
             string ticker = string.Empty;
 
             while (await reader.ReadAsync().ConfigureAwait(false))
@@ -223,27 +225,10 @@ VALUES (@OrderID, SYSUTCDATETIME(), @Quantity, @Price, @Amount, @Fees);";
                 var closePrice = reader.GetDecimal(reader.GetOrdinal("ClosePrice"));
                 ticker = SafeGetString(reader, "Ticker", ticker);
 
-                decimal? dailyReturn = null;
-                if (previousClose.HasValue && previousClose.Value != 0)
-                {
-                    dailyReturn = (closePrice - previousClose.Value) / previousClose.Value;
-                    cumulative = (cumulative ?? 0) + dailyReturn;
-                }
-
-                points.Add(new ReturnPointDto
-                {
-                    SecurityId = securityId,
-                    Ticker = ticker,
-                    PriceDate = priceDate,
-                    ClosePrice = closePrice,
-                    DailyReturnPct = SafeGetDecimal(reader, "DailyReturnPct", dailyReturn),
-                    CumReturnApprox = cumulative
-                });
-
-                previousClose = closePrice;
+                prices.Add(new SecurityPricePoint(priceDate, closePrice));
             }
 
-            return points;
+            return PortfolioCalculations.BuildReturnSeries(securityId, ticker, prices);
         }
         catch (Exception ex)
         {
@@ -275,8 +260,8 @@ ORDER BY t.TradeDate DESC;";
         {
             using var conn = _connectionFactory.CreateOpenConnection();
             using var cmd = new SqlCommand(sql, (SqlConnection)conn);
-            cmd.Parameters.AddWithValue("@AccountID", accountId);
-            cmd.Parameters.AddWithValue("@Take", take);
+            cmd.AddInt("@AccountID", accountId);
+            cmd.AddInt("@Take", take);
 
             using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
             var trades = new List<TradeSummaryDto>();
@@ -318,8 +303,8 @@ ORDER BY TxnDate DESC;";
         {
             using var conn = _connectionFactory.CreateOpenConnection();
             using var cmd = new SqlCommand(sql, (SqlConnection)conn);
-            cmd.Parameters.AddWithValue("@AccountID", accountId);
-            cmd.Parameters.AddWithValue("@Take", take);
+            cmd.AddInt("@AccountID", accountId);
+            cmd.AddInt("@Take", take);
 
             using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
             var results = new List<CashLedgerEntryDto>();
@@ -367,8 +352,8 @@ WHERE hv.AccountID = @AccountID AND hv.Quantity <> 0
         {
             using var conn = _connectionFactory.CreateOpenConnection();
             using var cmd = new SqlCommand(sql, (SqlConnection)conn);
-            cmd.Parameters.AddWithValue("@AccountID", accountId);
-            cmd.Parameters.AddWithValue("@TopN", topN);
+            cmd.AddInt("@AccountID", accountId);
+            cmd.AddInt("@TopN", topN);
 
             using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
             var holdings = new List<HoldingDto>();
@@ -404,19 +389,7 @@ WHERE hv.AccountID = @AccountID AND hv.Quantity <> 0
         try
         {
             var series = await GetSecurityReturnSeriesAsync(securityId, start, end).ConfigureAwait(false);
-            var returns = series
-                .Where(p => p.DailyReturnPct.HasValue)
-                .Select(p => p.DailyReturnPct!.Value)
-                .ToList();
-
-            if (returns.Count < 2)
-            {
-                return null;
-            }
-
-            var mean = returns.Average();
-            var variance = returns.Select(r => Math.Pow((double)(r - mean), 2)).Average();
-            return (decimal)Math.Sqrt(variance);
+            return PortfolioCalculations.CalculateVolatility(series.Select(p => p.DailyReturnPct));
         }
         catch (Exception ex)
         {
@@ -500,49 +473,30 @@ WHERE o.AccountID = @AccountID
 
         using var conn = _connectionFactory.CreateOpenConnection();
         using var cmd = new SqlCommand(sql, (SqlConnection)conn);
-        cmd.Parameters.AddWithValue("@AccountID", accountId);
-        var asOfParam = cmd.Parameters.Add("@AsOfDate", SqlDbType.DateTime);
-        asOfParam.Value = (object?)asOfDate ?? DBNull.Value;
+        cmd.AddInt("@AccountID", accountId);
+        cmd.AddDateTime("@AsOfDate", asOfDate);
 
         using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
-        var trades = new List<TradeRow>();
+        var trades = new List<TradeCalculationRow>();
         while (await reader.ReadAsync().ConfigureAwait(false))
         {
-            trades.Add(new TradeRow(
+            trades.Add(new TradeCalculationRow(
                 reader.GetInt32(0),
                 reader.GetString(1),
                 reader.GetDecimal(2),
-                reader.GetDecimal(3),
-                reader.GetDateTime(4)));
+                reader.GetDecimal(3)));
         }
 
-        decimal realized = 0m;
-        decimal invested = 0m;
-
-        foreach (var group in trades.GroupBy(t => t.SecurityId))
-        {
-            var buys = group.Where(t => string.Equals(t.OrderType, "BUY", StringComparison.OrdinalIgnoreCase)).ToList();
-            var sells = group.Where(t => string.Equals(t.OrderType, "SELL", StringComparison.OrdinalIgnoreCase)).ToList();
-
-            var totalBuyQty = buys.Sum(b => b.Quantity);
-            var totalBuyCost = buys.Sum(b => b.Quantity * b.Price);
-            invested += totalBuyCost;
-
-            var avgCost = totalBuyQty > 0 ? totalBuyCost / totalBuyQty : 0m;
-            var sellQty = sells.Sum(s => s.Quantity);
-            var sellProceeds = sells.Sum(s => s.Quantity * s.Price);
-            realized += sellProceeds - (sellQty * avgCost);
-        }
-
-        return (realized, invested);
+        var result = PortfolioCalculations.CalculateRealizedAndInvested(trades);
+        return (result.RealizedPl, result.InvestedCapital);
     }
 
     private static async Task<decimal> GetHoldingQuantityAsync(SqlConnection connection, int accountId, int securityId)
     {
         const string sql = @"SELECT Quantity FROM Holdings WHERE AccountID = @AccountID AND SecurityID = @SecurityID;";
         using var cmd = new SqlCommand(sql, connection);
-        cmd.Parameters.AddWithValue("@AccountID", accountId);
-        cmd.Parameters.AddWithValue("@SecurityID", securityId);
+        cmd.AddInt("@AccountID", accountId);
+        cmd.AddInt("@SecurityID", securityId);
         var result = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
         if (result == null || result == DBNull.Value)
         {
@@ -599,10 +553,7 @@ JOIN Accounts a ON a.AccountID = hv.AccountID
 WHERE {FILTER} AND hv.Quantity <> 0;";
 
         const string cashSqlTemplate = @"
-SELECT
-    SUM(cl.Amount) AS CashBalance,
-    SUM(CASE WHEN LOWER(cl.Type) LIKE 'deposit%' OR LOWER(cl.Type) LIKE 'dividend%' OR LOWER(cl.Type) LIKE 'credit%' THEN cl.Amount ELSE 0 END) AS Deposits,
-    SUM(CASE WHEN LOWER(cl.Type) LIKE 'withdraw%' OR LOWER(cl.Type) LIKE 'fee%' OR LOWER(cl.Type) LIKE 'debit%' THEN cl.Amount ELSE 0 END) AS Withdrawals
+SELECT cl.Amount, cl.Type
 FROM CashLedger cl
 JOIN Accounts a ON a.AccountID = cl.AccountID
 WHERE {FILTER};";
@@ -665,32 +616,32 @@ WHERE {FILTER};";
             var totalSecurityValue = securities.Sum(s => s.MarketValue);
             var totalUnrealized = securities.Sum(s => s.UnrealizedPL);
 
-            // Cash and contributions
-            decimal cashBalance = 0m;
-            decimal deposits = 0m;
-            decimal withdrawals = 0m;
+            var cashEntries = new List<CashContributionEntry>();
             var cashCmd = new SqlCommand(cashSqlTemplate.Replace("{FILTER}", filter), (SqlConnection)conn);
             AddFilterParam(cashCmd, accountId, userId);
             using (var reader = await cashCmd.ExecuteReaderAsync().ConfigureAwait(false))
             {
-                if (await reader.ReadAsync().ConfigureAwait(false))
+                while (await reader.ReadAsync().ConfigureAwait(false))
                 {
-                    cashBalance = reader.IsDBNull(0) ? 0m : reader.GetDecimal(0);
-                    deposits = reader.IsDBNull(1) ? 0m : reader.GetDecimal(1);
-                    withdrawals = reader.IsDBNull(2) ? 0m : reader.GetDecimal(2);
+                    cashEntries.Add(new CashContributionEntry(
+                        reader.IsDBNull(1) ? string.Empty : reader.GetString(1),
+                        reader.IsDBNull(0) ? 0m : reader.GetDecimal(0)));
                 }
             }
+
+            var cashBalance = cashEntries.Sum(c => c.Amount);
+            var (deposits, withdrawals) = PortfolioCalculations.CalculateContributions(cashEntries);
             var netContribution = deposits - withdrawals;
 
             // Trades for realized P/L
-            var trades = new List<(int SecurityId, string OrderType, decimal Qty, decimal Price)>();
+            var trades = new List<TradeCalculationRow>();
             var tradesCmd = new SqlCommand(tradesSqlTemplate.Replace("{FILTER}", filter), (SqlConnection)conn);
             AddFilterParam(tradesCmd, accountId, userId);
             using (var reader = await tradesCmd.ExecuteReaderAsync().ConfigureAwait(false))
             {
                 while (await reader.ReadAsync().ConfigureAwait(false))
                 {
-                    trades.Add((
+                    trades.Add(new TradeCalculationRow(
                         reader.GetInt32(0),
                         reader.GetString(1),
                         reader.GetDecimal(2),
@@ -699,16 +650,7 @@ WHERE {FILTER};";
                 }
             }
 
-            decimal realized = 0m;
-            foreach (var group in trades.GroupBy(t => t.SecurityId))
-            {
-                var buys = group.Where(t => string.Equals(t.OrderType, "BUY", StringComparison.OrdinalIgnoreCase)).ToList();
-                var sells = group.Where(t => string.Equals(t.OrderType, "SELL", StringComparison.OrdinalIgnoreCase)).ToList();
-                var buyQty = buys.Sum(b => b.Qty);
-                var buyCost = buys.Sum(b => b.Qty * b.Price);
-                var avgCost = buyQty > 0 ? buyCost / buyQty : 0m;
-                realized += sells.Sum(s => s.Qty * (s.Price - avgCost));
-            }
+            var realized = PortfolioCalculations.CalculateRealized(trades);
 
             var totalPortfolioValue = totalSecurityValue + cashBalance;
             var totalReturnPct = netContribution > 0 ? (totalPortfolioValue - netContribution) / netContribution : (decimal?)null;
@@ -738,13 +680,12 @@ WHERE {FILTER};";
     {
         if (accountId.HasValue)
         {
-            cmd.Parameters.AddWithValue("@AccountID", accountId.Value);
+            cmd.AddInt("@AccountID", accountId.Value);
         }
         else
         {
-            cmd.Parameters.AddWithValue("@UserID", userId!.Value);
+            cmd.AddInt("@UserID", userId!.Value);
         }
     }
 
-    private sealed record TradeRow(int SecurityId, string OrderType, decimal Quantity, decimal Price, DateTime TradeDate);
 }

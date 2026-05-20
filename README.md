@@ -1,174 +1,147 @@
-## Portfolio Console App
+# Portfolio Console Manager
 
-A menu-driven console app for managing portfolios against the existing `PortfolioDB` SQL Server database. Works with either Entity Framework (EF) or Stored Procedures (SP/ADO.NET) backends without changing the schema.
+A database-backed .NET portfolio management system built to demonstrate backend engineering, SQL Server design, and clean application architecture.
 
-### Prerequisites
-- SQL Server reachable at `localhost:1433` with `PortfolioDB` already created (per `db/Group45_p2.sql`).
-- .NET SDK (net10.0 used here).
-- Connection string defaults to `Server=localhost,1433;Database=PortfolioDB;User Id=sa;Password=Muhammadsaleh1@;TrustServerCertificate=True;` — override with env `PORTFOLIO_DB_CONNECTION` if needed.
+Portfolio Console Manager models brokerage-style workflows such as accounts, securities, holdings, orders, trades, cash activity, portfolio snapshots, realized profit/loss, return series, and volatility. The project is intentionally console-first: instead of relying on a decorative UI, it highlights the engineering decisions that matter in backend and database roles.
 
-### Quick start
+## Project Snapshot
+
+
+| --- | --- |
+| Backend architecture | Layered .NET solution with separate core, infrastructure, and console composition projects. |
+| SQL Server design | Normalized schema, indexes, views, triggers, stored procedures, deterministic seed data. |
+| Data-access strategy | Two interchangeable backends: Entity Framework Core and ADO.NET/stored procedures. |
+| Business logic | Shared finance calculations for realized P/L, contributions, returns, volatility, and validation. |
+| Configuration | Environment-driven connection handling with no hardcoded credentials. |
+| Developer quality | Dockerized database setup, automated tests, formatting checks, and package vulnerability audit. |
+
+
+
+Demonstrates how the same domain workflows can be implemented through two different persistence strategies while keeping business behavior consistent.
+
+- EF Core backend for expressive LINQ queries and object-oriented data access.
+- Stored-procedure backend for SQL-first workflows, typed parameters, and explicit transaction control.
+- Shared application contracts so the console can switch between backends without changing user workflows.
+- SQL triggers that keep holdings and cash ledger state consistent after trades.
+- Core calculation helpers that make financial behavior testable outside the database.
+- Reproducible SQL Server demo environment, so the project can be reviewed without private files or local machine assumptions.
+
+## Core Features
+
+- Account and user management.
+- Active security lookup with paged console tables.
+- Account holdings with market value and unrealized P/L.
+- Portfolio snapshots with cash, securities, realized P/L, net contribution, and total return.
+- Recent trades and cash ledger activity.
+- Buy/sell order placement with validation before database mutation.
+- Security return-series preview and volatility calculation.
+- Backend switching between EF and stored procedures.
+- Non-interactive demo mode for quick project review.
+
+## Architecture At A Glance
+
+```text
+ConsoleApp
+  CLI parsing, masked prompts, demo mode, startup composition
+
+ApplicationCore
+  DTOs, service contracts, validation, finance calculations
+
+Infrastructure.EF
+  EF Core DbContext and EF service implementations
+
+Infrastructure.SP
+  ADO.NET, typed SQL parameters, stored-procedure service implementations
+
+SQL Server
+  Tables, views, indexes, triggers, procedures, deterministic demo data
+```
+
+The console project is the composition root. It parses options, resolves configuration, checks database health, and explicitly constructs either the EF backend or the stored-procedure backend. Reflection-based startup was removed so dependencies are visible and easy to reason about.
+
+More detail: [Architecture](docs/architecture.md)
+
+## Database Design Highlights
+
+The SQL Server database includes:
+
+- `Users`, `Accounts`, `Securities`, `PriceHistory`, `Holdings`, `Orders`, `Trades`, and `CashLedger`.
+- Indexed valuation views for latest prices and account holding values.
+- Stored procedures for portfolio snapshots and security return series.
+- Triggers that update holdings and cash movements when trades are inserted.
+- Deterministic demo data using fixed securities, dates, prices, deposits, orders, and trades.
+
+The stored-procedure backend uses typed `SqlParameter` helpers instead of `AddWithValue`, and multi-step writes use transactions.
+
+More detail: [Database Design](docs/database.md)
+
+## Quality And Testing
+
+The project includes automated tests for:
+
+- Realized P/L and invested-capital calculations.
+- External contribution classification.
+- Return-series and volatility behavior.
+- Account and order validation edge cases.
+- CLI parsing and option precedence.
+- Password masking and width-aware table truncation.
+- Optional SQL Server integration equivalence between EF and stored-procedure backends.
+
+Verified quality gates:
+
 ```bash
 dotnet build PortfolioSolution.sln
-dotnet run --project src/ConsoleApp
+dotnet test PortfolioSolution.sln
+dotnet format PortfolioSolution.sln --verify-no-changes --verbosity minimal
+dotnet list PortfolioSolution.sln package --vulnerable
 ```
-- At startup, pick backend (EF or SP), optionally adjust connection string, then Continue.
-- On first run (when no accounts exist), the app seeds a couple of demo accounts and buys a handful of securities to create sample portfolios (best effort; skipped if accounts already exist).
 
-### Navigation (menu-first)
-Main Menu options (all numbered; press Enter after each action to return):
-1. **Select account** – choose an active account to work with.
-2. **Add account** – create a new user + account (prompts for username/full name/email/account name/type). The new account is auto-selected.
-3. **View securities** – choose “Active only” or “All”; non-synthetic tickers appear first; paged list with Previous/Next/Change page size.
-4. **View holdings** – shows ticker, qty, avg cost, price, market value, unrealized P/L with totals.
-5. **Portfolio snapshot** – shows as-of date, totals (market value, unrealized/realized P/L, return %), plus top 5 holdings.
-6. **Recent trades** – enter how many; shows date, ticker, side, qty, price.
-7. **Recent cash activity** – enter how many; shows date, type, amount, reference.
-8. **Top assets** – pick metric (MarketValue/UnrealizedPL/ReturnPct), enter top N; shows ranked holdings.
-9. **Security return series** – enter Security ID and optional date range; shows a preview of returns.
-10. **Place order** – buy/sell with Security ID, quantity, price. Sells are pre-validated against current holdings to avoid DB constraint errors.
-11. **Switch backend** – reopen startup menu to switch between EF and SP.
-12. **Exit** – quit the app.
+## Technical Stack
 
-### Backend selection
-- Startup and main menu both let you switch between EF and SP.
-- EF path uses `Infrastructure.EF` DbContext; SP path uses `Infrastructure.SP` ADO.NET with stored procedures.
+- .NET 10
+- C#
+- SQL Server 2022
+- Entity Framework Core
+- ADO.NET / Microsoft.Data.SqlClient
+- xUnit
+- Docker Compose
+- Mermaid documentation diagrams
 
-### Seeding behavior
-- If no accounts exist, the app tries to create two demo accounts and place a few BUY orders across available securities (prioritizes non-synthetic tickers). Failures are ignored so seeding never blocks you.
+The SDK is pinned with `global.json` to make the project reproducible on machines using .NET SDK `10.0.100`.
 
-## “Just Make It Work” Guide
+## Quick Demo for evaluation
 
-This app is a console-based portfolio manager that needs:
 
-- .NET SDK (to build/run)
-- SQL Server with the PortfolioDB schema (from `db/Group45_p2.sql`)
-
-Follow these steps exactly.
-
-### 1) Install prerequisites
-
-#### Windows
-1. Install .NET SDK (latest):
-   - Download from https://dotnet.microsoft.com/download (choose SDK, not runtime).
-   - After install, open Command Prompt and run `dotnet --info` to verify.
-2. Install SQL Server (Developer or Express):
-   - Download SQL Server from Microsoft (Developer edition preferred).
-   - Run installer → choose Mixed Mode auth → set `sa` password to `Muhammadsaleh1@` (or your own; remember it).
-   - Finish install.
-3. Enable TCP/IP on port 1433:
-   - Open “SQL Server Configuration Manager” → SQL Server Network Configuration → enable “TCP/IP”.
-   - Right-click TCP/IP → Properties → IP Addresses → set TCP Port to `1433` (at least in IPAll).
-   - Restart the SQL Server service.
-4. (Optional) Install SQL Server Management Studio (SSMS) for GUI queries.
-
-#### macOS (using Docker)
-1. Install Docker Desktop and start it.
-2. Run SQL Server in a container:
-   ```bash
-   docker run -e "ACCEPT_EULA=Y" -e "SA_PASSWORD=Muhammadsaleh1@" \
-     -p 1433:1433 --name sql1 -d mcr.microsoft.com/mssql/server:2022-latest
-   ```
-   If the container already exists, start it with `docker start sql1`.
-3. Install sqlcmd tooling (Homebrew):
-   ```bash
-   brew install mssql-tools
-   ```
-   (If sqlcmd ends up elsewhere, adjust the path below.)
-
-### 2) Get the code
-- With Git:
-  ```bash
-  git clone <your-repo-url> portfolio-app
-  cd portfolio-app
-  ```
-- Or download ZIP, extract, and open a terminal in the folder containing `PortfolioSolution.sln`.
-
-### 3) Create the PortfolioDB from the script
-Run these commands in the repo root (folder with `db/Group45_p2.sql`).
-
-#### Windows
 ```bash
-sqlcmd -S localhost,1433 -U sa -P "Muhammadsaleh1@" -i db/Group45_p2.sql
-```
-If you set a different `sa` password, replace it above.
+cp .env.example .env
+# Edit .env and set PORTFOLIO_DB_PASSWORD to a strong local password.
 
-Verify (optional):
-```bash
-sqlcmd -S localhost,1433 -U sa -P "YourPassword" -Q "SELECT name FROM sys.databases WHERE name='PortfolioDB';"
-```
+docker compose up -d
 
-#### macOS
-```bash
-/opt/mssql-tools/bin/sqlcmd -S localhost,1433 -U sa -P "Muhammadsaleh1@" -i db/Group45_p2.sql
-```
-Adjust the sqlcmd path if needed. Verify (optional):
-```bash
-/opt/mssql-tools/bin/sqlcmd -S localhost,1433 -U sa -P "Muhammadsaleh1@" -Q "SELECT name FROM sys.databases WHERE name='PortfolioDB';"
+set -a
+source .env
+set +a
+
+./scripts/setup-db.sh
+
+dotnet run --project src/ConsoleApp -- --backend ef --demo --no-seed
+dotnet run --project src/ConsoleApp -- --backend sp --demo --no-seed
 ```
 
-### 4) Connection string (defaults)
-The app assumes:
-```
-Server=localhost,1433;Database=PortfolioDB;User Id=sa;Password=Muhammadsaleh1@;TrustServerCertificate=True;
-```
-If you changed port/host/password, set an env var before running:
+Both demo commands show the same portfolio story through different backend implementations.
 
-- macOS/Linux:
-  ```bash
-  export PORTFOLIO_DB_CONNECTION="Server=localhost,1433;Database=PortfolioDB;User Id=sa;Password=YourPassword;TrustServerCertificate=True;"
-  ```
-- Windows PowerShell:
-  ```powershell
-  $env:PORTFOLIO_DB_CONNECTION="Server=localhost,1433;Database=PortfolioDB;User Id=sa;Password=YourPassword;TrustServerCertificate=True;"
-  ```
-When editing the connection inside the app, you only enter SQL username/password; the app builds the connection string using the default server (`localhost,1433`) and database (`PortfolioDB`). Edit the env var if you need a different host/port/db.
+Full walkthrough: [Reviewer Demo](docs/demo.md)
 
-### 5) Build and run the app
-From the repo root:
-```bash
-dotnet build PortfolioSolution.sln
-dotnet run --project src/ConsoleApp
+## Repository Map
+
+```text
+src/ApplicationCore       Business contracts, DTOs, validation, calculations
+src/Infrastructure.EF     Entity Framework implementation
+src/Infrastructure.SP     Stored-procedure / ADO.NET implementation
+src/ConsoleApp            CLI application and composition root
+tests                     Unit tests and optional SQL integration tests
+db/PortfolioDB.sql        Complete SQL Server setup script
+docs                      Architecture, database, demo, and interview notes
 ```
 
-### 6) Using the console app (step by step)
-**Startup screen:**
-- Choose backend: EF (Entity Framework/LINQ) or Stored Procedures (ADO.NET). You can switch later.
-- Review/confirm connection string (password is masked). If it’s wrong, edit it here.
-- Continue. If the DB has zero accounts, the app seeds two demo accounts with sample holdings automatically.
 
-**Main menu (all numbered; press Enter after each action):**
-1. Select account: Lists active accounts. Type the number to select one (required for holdings/trades/etc.).
-2. Add account: Prompts for username, full name, email, account name, account type. Creates a user + account and auto-selects it.
-3. Delete user: Lists users with account counts; confirms before deactivating their accounts.
-4. User overview: Aggregated view across all of a user’s accounts (per-security quantities, market value, unrealized P/L, cash balance, total portfolio value, realized P/L, net contributions, total return %).
-5. User security summary: Aggregated securities across the selected user, showing current price, qty, market value, unrealized P/L, and total security value.
-6. View securities: Choose Active-only or All. Non-synthetic tickers show first. Paging with Next/Previous/Change page size; “Synthetic” column flags generated tickers.
-7. View holdings: Shows ticker, qty, avg cost, current price, market value, unrealized P/L for the selected account. Totals at the bottom.
-8. Portfolio snapshot (account overview): Shows total security value, cash balance, combined portfolio value, total unrealized/realized P/L, net contributions (from cash ledger), total return %, plus top holdings for the selected account.
-9. Recent trades: Enter how many rows to show. Displays date, ticker, side, qty, price (selected account).
-10. Recent cash activity: Enter how many rows to show. Displays date, type, amount, reference (selected account).
-11. Top assets: Choose metric (MarketValue, UnrealizedPL, ReturnPct), enter top N; shows ranked holdings (selected account).
-12. Security return series: Enter Security ID and optional start/end dates. Preview returns (date, close, daily %, cumulative %). Use “View securities” to find IDs (selected account).
-13. Place order: Choose Buy or Sell, enter Security ID, quantity, price. SELLs are pre-validated against your current holdings; if you try to sell more than you hold, you get a friendly warning and nothing is sent to the DB (selected account).
-14. Switch backend: Reopen the startup menu and switch between EF and SP without restarting the app.
-15. Exit: Quit the app.
-
-**General tips:**
-- Always “Select account” after adding or switching backend to be sure you’re acting on the right account.
-- Use “View securities” to find Security IDs before placing orders.
-- SELL is blocked if you exceed available quantity (pre-check in both EF and SP).
-- You can switch EF/SP anytime; both paths hit the same database.
-
-### 7) Common issues and fixes
-- Cannot connect: Ensure SQL Server is running, port 1433 open, password correct, and `PORTFOLIO_DB_CONNECTION` matches your setup.
-- Login failed for sa: Reset or change sa password and update the connection string/env var.
-- `dotnet` not found: Reinstall .NET SDK; verify with `dotnet --info`.
-- macOS `sqlcmd` not found: Check `/opt/mssql-tools/bin` or reinstall `mssql-tools`.
-- Docker container not running: Start it with `docker start sql1`.
-
-### Tips & gotchas
-- Ensure SQL Server is running and reachable on the given port; otherwise data menus will show errors.
-- Security IDs come from the securities list; use “View securities” to find IDs before placing orders.
-- Sells are blocked if you try to sell more than you hold (friendly warning shown).
-- Connection string masking hides the password in the UI; full string can be set via env var if needed.

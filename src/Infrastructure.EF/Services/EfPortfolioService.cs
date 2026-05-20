@@ -1,4 +1,5 @@
 using ApplicationCore.DTOs;
+using ApplicationCore.Domain;
 using ApplicationCore.Enums;
 using ApplicationCore.Services;
 using Infrastructure.EF.Generated;
@@ -63,7 +64,7 @@ public class EfPortfolioService : IPortfolioService
             var trades = await _context.Trades
                 .AsNoTracking()
                 .Where(t => t.Order.AccountID == accountId && t.TradeDate <= effectiveDateTime)
-                .Select(t => new TradeRow(
+                .Select(t => new TradeCalculationRow(
                     t.Order.SecurityID,
                     t.Order.OrderType,
                     t.Quantity,
@@ -71,7 +72,7 @@ public class EfPortfolioService : IPortfolioService
                 .ToListAsync()
                 .ConfigureAwait(false);
 
-            var realizedAndInvested = CalculateRealizedAndInvested(trades);
+            var realizedAndInvested = PortfolioCalculations.CalculateRealizedAndInvested(trades);
             var totalReturnPct = realizedAndInvested.InvestedCapital > 0
                 ? (totalMarketValue + realizedAndInvested.RealizedPl) / realizedAndInvested.InvestedCapital - 1
                 : (decimal?)null;
@@ -108,10 +109,9 @@ public class EfPortfolioService : IPortfolioService
                 .FirstOrDefaultAsync()
                 .ConfigureAwait(false);
 
-            if (orderType == "SELL" && existingQty < order.Quantity)
-            {
-                throw new InvalidOperationException($"Insufficient quantity to sell. Available: {existingQty}, Requested: {order.Quantity}.");
-            }
+            PortfolioValidation.ValidateOrder(order, existingQty);
+
+            await using var tx = await _context.Database.BeginTransactionAsync().ConfigureAwait(false);
 
             var newOrder = new Order
             {
@@ -139,6 +139,16 @@ public class EfPortfolioService : IPortfolioService
 
             await _context.Trades.AddAsync(trade).ConfigureAwait(false);
             await _context.SaveChangesAsync().ConfigureAwait(false);
+
+            await tx.CommitAsync().ConfigureAwait(false);
+        }
+        catch (ArgumentException)
+        {
+            throw;
+        }
+        catch (InvalidOperationException ex) when (ex.Message.StartsWith("Insufficient quantity to sell", StringComparison.Ordinal))
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -170,33 +180,10 @@ public class EfPortfolioService : IPortfolioService
                 .ToListAsync()
                 .ConfigureAwait(false);
 
-            decimal? previousClose = null;
-            decimal? cumulativeReturn = null;
-            var points = new List<ReturnPointDto>(prices.Count);
-
-            foreach (var price in prices)
-            {
-                decimal? dailyReturn = null;
-                if (previousClose.HasValue && previousClose.Value != 0)
-                {
-                    dailyReturn = (price.ClosePrice - previousClose.Value) / previousClose.Value;
-                    cumulativeReturn = (cumulativeReturn ?? 0) + dailyReturn;
-                }
-
-                points.Add(new ReturnPointDto
-                {
-                    SecurityId = price.SecurityID,
-                    Ticker = ticker,
-                    PriceDate = price.PriceDate.ToDateTime(TimeOnly.MinValue),
-                    ClosePrice = price.ClosePrice,
-                    DailyReturnPct = dailyReturn,
-                    CumReturnApprox = cumulativeReturn
-                });
-
-                previousClose = price.ClosePrice;
-            }
-
-            return points;
+            return PortfolioCalculations.BuildReturnSeries(
+                securityId,
+                ticker,
+                prices.Select(p => new SecurityPricePoint(p.PriceDate.ToDateTime(TimeOnly.MinValue), p.ClosePrice)));
         }
         catch (Exception ex)
         {
@@ -311,29 +298,12 @@ public class EfPortfolioService : IPortfolioService
                 .ToListAsync()
                 .ConfigureAwait(false);
 
-            var returns = new List<decimal>();
-            decimal? previousClose = null;
+            var series = PortfolioCalculations.BuildReturnSeries(
+                securityId,
+                string.Empty,
+                prices.Select(p => new SecurityPricePoint(p.PriceDate.ToDateTime(TimeOnly.MinValue), p.ClosePrice)));
 
-            foreach (var ph in prices)
-            {
-                if (previousClose.HasValue && previousClose.Value != 0)
-                {
-                    var daily = (ph.ClosePrice - previousClose.Value) / previousClose.Value;
-                    returns.Add(daily);
-                }
-
-                previousClose = ph.ClosePrice;
-            }
-
-            if (returns.Count < 2)
-            {
-                return null;
-            }
-
-            var mean = returns.Average();
-            var variance = returns.Select(r => Math.Pow((double)(r - mean), 2)).Average();
-            var stdDev = Math.Sqrt(variance);
-            return (decimal)stdDev;
+            return PortfolioCalculations.CalculateVolatility(series.Select(p => p.DailyReturnPct));
         }
         catch (Exception ex)
         {
@@ -445,30 +415,6 @@ public class EfPortfolioService : IPortfolioService
         return latestPrices.ToDictionary(p => p.SecurityID, p => (p.ClosePrice, p.PriceDate));
     }
 
-    private static (decimal RealizedPl, decimal InvestedCapital) CalculateRealizedAndInvested(IEnumerable<TradeRow> trades)
-    {
-        decimal realized = 0m;
-        decimal invested = 0m;
-
-        var grouped = trades.GroupBy(t => t.SecurityId);
-        foreach (var group in grouped)
-        {
-            var buys = group.Where(t => string.Equals(t.OrderType, "BUY", StringComparison.OrdinalIgnoreCase)).ToList();
-            var sells = group.Where(t => string.Equals(t.OrderType, "SELL", StringComparison.OrdinalIgnoreCase)).ToList();
-
-            var totalBuyQty = buys.Sum(b => b.Quantity);
-            var totalBuyCost = buys.Sum(b => b.Quantity * b.Price);
-            invested += totalBuyCost;
-
-            var avgCost = totalBuyQty > 0 ? totalBuyCost / totalBuyQty : 0m;
-            var sellQty = sells.Sum(s => s.Quantity);
-            var sellProceeds = sells.Sum(s => s.Quantity * s.Price);
-            realized += sellProceeds - (sellQty * avgCost);
-        }
-
-        return (realized, invested);
-    }
-
     private static HoldingDto MapHolding(Holding holding, Dictionary<int, (decimal ClosePrice, DateOnly PriceDate)> priceLookup)
     {
         var price = priceLookup.TryGetValue(holding.SecurityID, out var p)
@@ -492,8 +438,6 @@ public class EfPortfolioService : IPortfolioService
             UnrealizedPL = unrealized
         };
     }
-
-    private sealed record TradeRow(int SecurityId, string OrderType, decimal Quantity, decimal Price);
 
     private async Task<PortfolioOverviewDto> BuildOverviewAsync(IReadOnlyCollection<int> accountIds, int? accountId, int? userId)
     {
@@ -556,13 +500,14 @@ public class EfPortfolioService : IPortfolioService
             .ConfigureAwait(false);
 
         var cashBalance = cashEntries.Sum(c => c.Amount);
-        var (deposits, withdrawals) = CalculateContributions(cashEntries);
+        var (deposits, withdrawals) = PortfolioCalculations.CalculateContributions(
+            cashEntries.Select(c => new CashContributionEntry(c.Type, c.Amount)));
         var netContribution = deposits - withdrawals;
 
         var trades = await _context.Trades
             .AsNoTracking()
             .Where(t => accountIds.Contains(t.Order.AccountID))
-            .Select(t => new TradeRow(
+            .Select(t => new TradeCalculationRow(
                 t.Order.SecurityID,
                 t.Order.OrderType,
                 t.Quantity,
@@ -570,7 +515,7 @@ public class EfPortfolioService : IPortfolioService
             .ToListAsync()
             .ConfigureAwait(false);
 
-        var totalRealized = CalculateRealized(trades);
+        var totalRealized = PortfolioCalculations.CalculateRealized(trades);
         var totalPortfolioValue = totalSecurityValue + cashBalance;
         var totalReturnPct = netContribution > 0 ? (totalPortfolioValue - netContribution) / netContribution : (decimal?)null;
 
@@ -589,51 +534,4 @@ public class EfPortfolioService : IPortfolioService
         };
     }
 
-    private static decimal CalculateRealized(IEnumerable<TradeRow> trades)
-    {
-        decimal realized = 0m;
-        var grouped = trades.GroupBy(t => t.SecurityId);
-
-        foreach (var group in grouped)
-        {
-            var buys = group.Where(t => string.Equals(t.OrderType, "BUY", StringComparison.OrdinalIgnoreCase)).ToList();
-            var sells = group.Where(t => string.Equals(t.OrderType, "SELL", StringComparison.OrdinalIgnoreCase)).ToList();
-
-            var buyQty = buys.Sum(b => b.Quantity);
-            var buyCost = buys.Sum(b => b.Quantity * b.Price);
-            var avgCost = buyQty > 0 ? buyCost / buyQty : 0m;
-            realized += sells.Sum(s => s.Quantity * (s.Price - avgCost));
-        }
-
-        return realized;
-    }
-
-    private static (decimal deposits, decimal withdrawals) CalculateContributions(IEnumerable<CashLedger> entries)
-    {
-        decimal deposits = 0m;
-        decimal withdrawals = 0m;
-
-        foreach (var entry in entries)
-        {
-            var type = (entry.Type ?? string.Empty).ToLowerInvariant();
-            if (type.StartsWith("deposit") || type.StartsWith("dividend") || type.StartsWith("credit"))
-            {
-                deposits += entry.Amount;
-            }
-            else if (type.StartsWith("withdraw") || type.StartsWith("fee") || type.StartsWith("debit"))
-            {
-                withdrawals += entry.Amount;
-            }
-            else if (entry.Amount < 0)
-            {
-                withdrawals += Math.Abs(entry.Amount);
-            }
-            else
-            {
-                deposits += entry.Amount;
-            }
-        }
-
-        return (deposits, withdrawals);
-    }
 }
