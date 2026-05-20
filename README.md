@@ -6,7 +6,7 @@ Portfolio Console Manager models brokerage-style workflows such as accounts, sec
 
 ## Project Snapshot
 
-
+| Area | description |
 | --- | --- |
 | Backend architecture | Layered .NET solution with separate core, infrastructure, and console composition projects. |
 | SQL Server design | Normalized schema, indexes, views, triggers, stored procedures, deterministic seed data. |
